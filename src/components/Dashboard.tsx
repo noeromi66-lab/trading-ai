@@ -5,6 +5,7 @@ import { useAuth } from '../lib/auth/AuthContext';
 import SignalCard from './SignalCard';
 import TopTradeCard from './TopTradeCard';
 import AIAnalysis from './AIAnalysis';
+import { marketScanOrchestrator } from '../lib/services/marketScanOrchestrator';
 
 export default function Dashboard() {
   const { user } = useAuth();
@@ -196,24 +197,19 @@ export default function Dashboard() {
     setError(null);
 
     try {
-      const apiUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/analyze-market`;
-      const { data: { session } } = await supabase.auth.getSession();
-
-      const response = await fetch(apiUrl, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${session?.access_token || import.meta.env.VITE_SUPABASE_ANON_KEY}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ pairSymbol: selectedPair, testMode: true })
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to analyze market');
+      if (selectedPair) {
+        console.log(`Scanning ${selectedPair}...`);
+        const result = await marketScanOrchestrator.scanSinglePair(selectedPair, user?.id);
+        console.log(`Scan complete for ${selectedPair}:`, result.aiAnalysis);
+      } else {
+        console.log('Scanning all markets...');
+        const summary = await marketScanOrchestrator.scanAllMarkets(user?.id);
+        console.log(`Scan complete: ${summary.successfulScans}/${summary.totalPairs} pairs analyzed`);
       }
 
       await loadSignals();
     } catch (err) {
+      console.error('Market scan error:', err);
       setError(err instanceof Error ? err.message : 'Scan failed');
     } finally {
       setScanning(false);
