@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Test Polygon.io API</title>
+  <style>
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      max-width: 800px;
+      margin: 50px auto;
+      padding: 20px;
+      background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+      color: #e2e8f0;
+      min-height: 100vh;
+    }
+    h1 {
+      background: linear-gradient(to right, #f59e0b, #d97706);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      margin-bottom: 30px;
+    }
+    button {
+      background: linear-gradient(to right, #f59e0b, #d97706);
+      color: white;
+      border: none;
+      padding: 12px 24px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 16px;
+      font-weight: 600;
+      margin: 10px 10px 10px 0;
+      transition: transform 0.2s;
+    }
+    button:hover {
+      transform: scale(1.05);
+    }
+    button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+    #result {
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 12px;
+      padding: 20px;
+      margin-top: 20px;
+      white-space: pre-wrap;
+      font-family: 'Courier New', monospace;
+      font-size: 14px;
+      max-height: 500px;
+      overflow-y: auto;
+    }
+    .success {
+      color: #10b981;
+    }
+    .error {
+      color: #ef4444;
+    }
+    .info {
+      color: #3b82f6;
+    }
+    .warning {
+      color: #f59e0b;
+    }
+    .code {
+      background: #0f172a;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-family: 'Courier New', monospace;
+    }
+  </style>
+</head>
+<body>
+  <h1>🔍 Test Polygon.io API Connection</h1>
+
+  <p>Your API Key: <span class="code">_OSxpOFyFmoejpLLo1qnJ7r4e4Ajie9F</span></p>
+
+  <div>
+    <button onclick="testPair('EURUSD')">Test EUR/USD</button>
+    <button onclick="testPair('GBPUSD')">Test GBP/USD</button>
+    <button onclick="testPair('XAUUSD')">Test XAU/USD</button>
+    <button onclick="testPair('USDJPY')">Test USD/JPY</button>
+    <button onclick="testAll()">Test All Pairs</button>
+  </div>
+
+  <div id="result"></div>
+
+  <script>
+    const API_KEY = '_OSxpOFyFmoejpLLo1qnJ7r4e4Ajie9F';
+    const resultDiv = document.getElementById('result');
+
+    function log(message, type = 'info') {
+      const timestamp = new Date().toLocaleTimeString();
+      resultDiv.innerHTML += `<span class="${type}">[${timestamp}] ${message}</span>\n`;
+      resultDiv.scrollTop = resultDiv.scrollHeight;
+    }
+
+    async function testPair(symbol) {
+      resultDiv.innerHTML = '';
+      log(`Testing ${symbol}...`, 'info');
+
+      const forex = symbol.replace('/', '');
+      const to = Date.now();
+      const from = to - (200 * 15 * 60 * 1000); // 200 candles of 15min
+
+      const url = `https://api.polygon.io/v2/aggs/ticker/C:${forex}/range/15/minute/${from}/${to}?adjusted=true&sort=asc&limit=200&apiKey=${API_KEY}`;
+
+      log(`Fetching data from Polygon.io...`, 'info');
+
+      try {
+        const response = await fetch(url);
+        const data = await response.json();
+
+        if (response.ok && data.results && data.results.length > 0) {
+          log(`✅ SUCCESS! Got ${data.results.length} candles`, 'success');
+          log(`\nLatest price data:`, 'info');
+          const latest = data.results[data.results.length - 1];
+          log(`  Open: ${latest.o}`, 'info');
+          log(`  High: ${latest.h}`, 'info');
+          log(`  Low: ${latest.l}`, 'info');
+          log(`  Close: ${latest.c}`, 'success');
+          log(`  Volume: ${latest.v}`, 'info');
+          log(`  Time: ${new Date(latest.t).toLocaleString()}`, 'info');
+
+          log(`\nAPI Status: OK ✅`, 'success');
+          log(`Your Polygon.io API key is working correctly!`, 'success');
+        } else {
+          log(`⚠️ No data returned`, 'warning');
+          log(`Response: ${JSON.stringify(data, null, 2)}`, 'warning');
+        }
+      } catch (error) {
+        log(`❌ ERROR: ${error.message}`, 'error');
+      }
+    }
+
+    async function testAll() {
+      const pairs = ['EURUSD', 'GBPUSD', 'XAUUSD', 'USDJPY', 'GBPJPY'];
+      resultDiv.innerHTML = '';
+      log('Testing all pairs...', 'info');
+
+      for (const pair of pairs) {
+        await new Promise(resolve => setTimeout(resolve, 1000)); // Rate limit
+        await testPair(pair);
+        log('-------------------', 'info');
+      }
+
+      log('\n✅ All tests completed!', 'success');
+    }
+  </script>
+</body>
+</html>

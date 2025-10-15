@@ -1,0 +1,86 @@
+═══════════════════════════════════════════════════════════════
+   🚀 TRADING AI - QUICK START GUIDE
+═══════════════════════════════════════════════════════════════
+
+✅ VOS API KEYS SONT CONFIGURÉES:
+   • Polygon.io: _OSxpOFyFmo... (Real market data)
+   • OpenAI: sk-svcacct-HRZYCv8... (AI analysis)
+   • Resend: re_5qnfaj1X_6... (Notifications)
+
+═══════════════════════════════════════════════════════════════
+   📋 PARAMÈTRES CRON JOB
+═══════════════════════════════════════════════════════════════
+
+URL:
+https://wumtsgpybpwtvqierlxr.supabase.co/functions/v1/auto-scan
+
+METHOD: POST
+
+HEADERS:
+Content-Type: application/json
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Ind1bXRzZ3B5YnB3dHZxaWVybHhyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjA0NDE5ODYsImV4cCI6MjA3NjAxNzk4Nn0.Mz9ln7_i6gm0pBKQE-4W0Txl5tl1qCoiCSUnJNkYHvY
+
+BODY: {}
+
+SCHEDULE: */15 * * * * (Every 15 minutes)
+
+═══════════════════════════════════════════════════════════════
+   🔧 BUG SETTINGS - CORRIGÉ! ✅
+═══════════════════════════════════════════════════════════════
+
+Le problème de sauvegarde des settings est maintenant RÉSOLU!
+Vous pouvez:
+  ✅ Sélectionner vos paires préférées
+  ✅ Changer confidence threshold
+  ✅ Activer/désactiver auto-scan
+  ✅ Configurer scan interval
+  ✅ SAUVEGARDER avec succès!
+
+═══════════════════════════════════════════════════════════════
+   🎯 POUR DÉMARRER
+═══════════════════════════════════════════════════════════════
+
+1. Lancer l'app:
+   npm run dev
+
+2. Créer un compte ou se connecter
+
+3. Aller dans Settings:
+   • Sélectionner paires (EURUSD, GBPUSD, XAUUSD...)
+   • Activer In-App Notifications (obligatoire)
+   • Activer Auto-Scan
+   • Sauvegarder ✅
+
+4. Configurer le cron job:
+   • Aller sur cron-job.org
+   • Copier les paramètres ci-dessus
+   • Enable!
+
+5. C'est tout! Les scans automatiques commenceront.
+
+═══════════════════════════════════════════════════════════════
+   📚 DOCUMENTATION COMPLÈTE
+═══════════════════════════════════════════════════════════════
+
+• CRONJOB_PARAMETERS.md - Tous les paramètres détaillés
+• API_KEYS_CONFIGURED.md - Status des API keys
+• TEST_EVERYTHING.md - Tests complets
+• SETUP.md - Guide complet
+• WHATS_NEW.md - Nouveautés
+
+═══════════════════════════════════════════════════════════════
+   ✅ CONFIRMÉ FONCTIONNEL
+═══════════════════════════════════════════════════════════════
+
+✅ API Keys intégrées dans le code
+✅ Polygon.io data en temps réel
+✅ Edge Functions déployées
+✅ Bug Settings corrigé
+✅ Persistance complète
+✅ Strategy unlock sans SMS requis
+✅ Auto-scan prêt
+✅ Documentation complète
+
+VOTRE TRADING AI EST PRÊT! 🎉
+
+═══════════════════════════════════════════════════════════════
