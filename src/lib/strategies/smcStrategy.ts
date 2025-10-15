@@ -1,5 +1,4 @@
 import type { Candle, StrategyResult, SwingPoint } from '../types';
-import { pythonPreCalculator } from '../modules/pythonPreCalculator';
 
 export function findSwingPoints(candles: Candle[], lookback: number = 5): SwingPoint[] {
   const swings: SwingPoint[] = [];
@@ -18,6 +17,49 @@ export function findSwingPoints(candles: Candle[], lookback: number = 5): SwingP
   return swings;
 }
 
+function detectSimpleLiquiditySweep(candles: Candle[]) {
+  const swings = findSwingPoints(candles, 3);
+  const recent = candles.slice(-20);
+
+  for (const swing of swings.slice(-5)) {
+    for (let i = 0; i < recent.length; i++) {
+      const candle = recent[i];
+      if (swing.type === 'high' && candle.high > swing.price && candle.close < swing.price) {
+        return { detected: true, sweptLevel: swing.price, sweptType: 'high', strength: 75 };
+      }
+      if (swing.type === 'low' && candle.low < swing.price && candle.close > swing.price) {
+        return { detected: true, sweptLevel: swing.price, sweptType: 'low', strength: 75 };
+      }
+    }
+  }
+  return { detected: false, sweptLevel: null, sweptType: null, strength: 0 };
+}
+
+function detectSimpleBreakOfStructure(candles: Candle[]) {
+  if (candles.length < 50) return { detected: false, type: null, breakLevel: null, strength: 0 };
+
+  const swings = findSwingPoints(candles, 3);
+  const recentHighs = swings.filter(s => s.type === 'high').slice(-3);
+  const recentLows = swings.filter(s => s.type === 'low').slice(-3);
+  const lastCandle = candles[candles.length - 1];
+
+  if (recentHighs.length >= 1) {
+    const targetHigh = recentHighs[recentHighs.length - 1];
+    if (lastCandle.close > targetHigh.price) {
+      return { detected: true, type: 'bullish', breakLevel: targetHigh.price, strength: 75 };
+    }
+  }
+
+  if (recentLows.length >= 1) {
+    const targetLow = recentLows[recentLows.length - 1];
+    if (lastCandle.close < targetLow.price) {
+      return { detected: true, type: 'bearish', breakLevel: targetLow.price, strength: 75 };
+    }
+  }
+
+  return { detected: false, type: null, breakLevel: null, strength: 0 };
+}
+
 export function analyzeSMCStrategy(candles: Candle[]): StrategyResult {
   if (candles.length < 50) {
     return {
@@ -30,21 +72,18 @@ export function analyzeSMCStrategy(candles: Candle[]): StrategyResult {
     };
   }
 
-  // Use Python pre-calculator for accurate BoS and Liquidity Sweep detection
-  const liquiditySweep = pythonPreCalculator.detectLiquiditySweep(candles);
-  const breakOfStructure = pythonPreCalculator.detectBreakOfStructure(candles);
+  const liquiditySweep = detectSimpleLiquiditySweep(candles);
+  const breakOfStructure = detectSimpleBreakOfStructure(candles);
 
   const criteriaPassed: Record<string, boolean> = {};
   const criteriaFailed: Record<string, boolean> = {};
 
-  // Use Python pre-calculator results for liquidity sweep
   if (liquiditySweep.detected && liquiditySweep.strength >= 70) {
     criteriaPassed.liquidity_sweep = true;
   } else {
     criteriaFailed.liquidity_sweep = true;
   }
 
-  // Use Python pre-calculator results for break of structure
   if (breakOfStructure.detected && breakOfStructure.strength >= 70) {
     criteriaPassed.break_of_structure = true;
   } else {
@@ -54,7 +93,6 @@ export function analyzeSMCStrategy(candles: Candle[]): StrategyResult {
   const recent = candles.slice(-20);
   const lastCandle = candles[candles.length - 1];
 
-  // Keep existing order block detection (this works well)
   const avgVolume = recent.reduce((sum, c) => sum + c.volume, 0) / recent.length;
   const orderBlockDetected = recent.slice(-10).some((c, i, arr) => {
     const bodySize = Math.abs(c.close - c.open);
@@ -72,7 +110,6 @@ export function analyzeSMCStrategy(candles: Candle[]): StrategyResult {
   if (orderBlockDetected) criteriaPassed.order_block = true;
   else criteriaFailed.order_block = true;
 
-  // Keep existing FVG detection (this works well)
   const fvgDetected = recent.slice(0, -2).some((c, i) => {
     if (i + 2 < recent.length) {
       const gap = recent[i + 2].low - c.high;
@@ -93,17 +130,16 @@ export function analyzeSMCStrategy(candles: Candle[]): StrategyResult {
       confidence: (passedCount / totalCriteria) * 100,
       criteriaPassed,
       criteriaFailed,
-      explanation: 'The market structure is developing but lacks sufficient institutional confirmation. Python analysis shows incomplete liquidity patterns and structure breaks. Waiting for clearer smart money footprints.',
-      details: { 
+      explanation: 'The market structure is developing but lacks sufficient institutional confirmation. Waiting for clearer smart money footprints.',
+      details: {
         liquiditySweep: liquiditySweep.strength,
         breakOfStructure: breakOfStructure.strength,
-        passedCount, 
-        totalCriteria 
+        passedCount,
+        totalCriteria
       }
     };
   }
 
-  // Determine signal based on BoS direction if detected
   let signal: 'BUY' | 'SELL' = 'HOLD';
   if (breakOfStructure.detected && breakOfStructure.type) {
     signal = breakOfStructure.type === 'bullish' ? 'BUY' : 'SELL';
@@ -111,17 +147,15 @@ export function analyzeSMCStrategy(candles: Candle[]): StrategyResult {
     signal = lastCandle.close > candles[candles.length - 2].close ? 'BUY' : 'SELL';
   }
 
-  // Enhanced confidence calculation using Python pre-calculator results
   let confidence = 50 + (passedCount / totalCriteria) * 30;
-  
-  // Boost confidence based on Python analysis strength
+
   if (liquiditySweep.detected) {
     confidence += (liquiditySweep.strength / 100) * 15;
   }
   if (breakOfStructure.detected) {
     confidence += (breakOfStructure.strength / 100) * 15;
   }
-  
+
   confidence = Math.min(95, confidence);
 
   return {
@@ -129,8 +163,8 @@ export function analyzeSMCStrategy(candles: Candle[]): StrategyResult {
     confidence,
     criteriaPassed,
     criteriaFailed,
-    explanation: `Python analysis confirms institutional ${signal.toLowerCase()} setup. ${liquiditySweep.detected ? `Liquidity sweep detected at ${liquiditySweep.sweptLevel?.toFixed(5)} (${liquiditySweep.strength}% strength). ` : ''}${breakOfStructure.detected ? `Break of structure confirmed ${breakOfStructure.type} at ${breakOfStructure.breakLevel?.toFixed(5)} (${breakOfStructure.strength}% strength). ` : ''}This is high-probability smart money positioning.`,
-    details: { 
+    explanation: `Institutional ${signal.toLowerCase()} setup detected. ${liquiditySweep.detected ? `Liquidity sweep at ${liquiditySweep.sweptLevel?.toFixed(5)}. ` : ''}${breakOfStructure.detected ? `Break of structure ${breakOfStructure.type} at ${breakOfStructure.breakLevel?.toFixed(5)}. ` : ''}High-probability smart money positioning.`,
+    details: {
       direction: signal,
       liquiditySweep: liquiditySweep,
       breakOfStructure: breakOfStructure

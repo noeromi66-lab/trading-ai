@@ -261,7 +261,7 @@ export default function Dashboard() {
         <div className="flex flex-wrap gap-2 md:gap-3 mb-6">
           <button
             onClick={() => {
-              setSelectedPair(pair.symbol);
+              setSelectedPair(null);
               setShowTopTradeOnly(false);
             }}
             className={`px-4 py-2 md:px-6 md:py-3 rounded-lg whitespace-nowrap transition-all text-sm md:text-base font-medium ${
@@ -269,10 +269,6 @@ export default function Dashboard() {
                 ? 'bg-gradient-to-r from-amber-500 to-amber-600 text-white'
                 : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
             }`}
-            onClick={() => {
-              setSelectedPair(null);
-              setShowTopTradeOnly(false);
-            }}
           >
             All Pairs
           </button>

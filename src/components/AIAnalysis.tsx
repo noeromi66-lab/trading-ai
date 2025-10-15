@@ -96,28 +96,26 @@ export default function AIAnalysis() {
         .order('created_at', { ascending: false })
         .limit(20);
 
-      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || 'https://wumtsgpybpwtvqierlxr.supabase.co';
-      const apiUrl = `${supabaseUrl}/functions/v1/ai-analysis`;
-      const { data: { session } } = await supabase.auth.getSession();
+      const buySignals = recentSignals?.filter(s => s.signal_type === 'BUY').length || 0;
+      const sellSignals = recentSignals?.filter(s => s.signal_type === 'SELL').length || 0;
+      const totalSignals = recentSignals?.length || 0;
 
-      const response = await fetch(apiUrl, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${session?.access_token || import.meta.env.VITE_SUPABASE_ANON_KEY}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ signals: recentSignals })
-      });
+      const defaultThoughts = [
+        `**Market Activity:** ${totalSignals} signal${totalSignals !== 1 ? 's' : ''} detected in the last 5 minutes. ${buySignals} BUY, ${sellSignals} SELL opportunities identified.`,
+        '**Analysis System:** AI analysis engine is being recoded for enhanced accuracy and performance.',
+        '**Trading Signals:** Review individual signal cards below for entry points, stop loss, and take profit levels.',
+        '**Risk Management:** Always risk 1-2% per trade maximum. Capital preservation is priority number one.',
+        '**Session Timing:** Best setups occur during London (07:00 UTC) and New York (13:45 UTC) killzones.',
+        '**Confluence:** Check multiple pairs for correlated moves to strengthen signal conviction.'
+      ];
 
-      if (response.ok) {
-        const data = await response.json();
-        setAnalysis(data.analysis);
-        setThoughts(data.thoughts || [data.analysis]);
-        setLastUpdate(new Date());
-      }
+      setAnalysis(`Market Intelligence: ${totalSignals} signals analyzed`);
+      setThoughts(defaultThoughts);
+      setLastUpdate(new Date());
     } catch (err) {
-      console.error('AI analysis failed:', err);
+      console.error('Analysis failed:', err);
       setAnalysis('Unable to generate analysis at this time.');
+      setThoughts(['Analysis system temporarily unavailable. Please try again.']);
     } finally {
       setLoading(false);
     }
@@ -234,9 +232,9 @@ export default function AIAnalysis() {
 
       <div className="mt-4 p-3 bg-slate-900/50 rounded-lg border border-slate-800">
         <p className="text-xs text-slate-400 leading-relaxed">
-          <span className="text-purple-400 font-semibold">GPT-4 Trading Expert:</span> Advanced AI with 10+ years prop firm experience.
-          Analyzes real-time market data, pair confluences via Polygon.io, institutional flows, and key levels
-          to identify high-probability setups with optimal risk management and cross-pair confirmation.
+          <span className="text-purple-400 font-semibold">Market Intelligence:</span> Real-time signal analysis system.
+          Monitors recent market activity, signal distribution, and trading opportunities.
+          Analysis engine being upgraded for enhanced ICT/SMC methodology and institutional flow detection.
         </p>
       </div>
     </div>
