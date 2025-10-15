@@ -29,13 +29,358 @@ interface BreakOfStructureResult {
   confirmationCandle: number | null;
   strength: number; // 0-100
   previousStructure: SwingPoint[];
+  timeframeConfirmation: Record<string, boolean>;
+  multiTimeframeStrength: number;
 }
 
 export class PythonPreCalculator {
   private readonly MIN_SWING_STRENGTH = 3; // Minimum candles on each side for swing point
   private readonly LIQUIDITY_THRESHOLD = 0.0001; // Minimum price difference for liquidity sweep
   private readonly BOS_CONFIRMATION_CANDLES = 2; // Candles needed to confirm BoS
+  private readonly TIMEFRAMES = ['M15', 'H1', 'H4']; // Supported timeframes for multi-analysis
 
+  /**
+   * Enhanced multi-timeframe analysis for liquidity sweeps
+   */
+  public detectLiquiditySweepMultiTimeframe(candleData: Record<string, CandleData[]>): LiquiditySweepResult {
+    let bestSweep: LiquiditySweepResult = { 
+      detected: false, 
+      sweptLevel: null, 
+      sweptType: null, 
+      confirmationCandle: null, 
+      strength: 0 
+    };
+
+    // Analyze each timeframe
+    for (const timeframe of this.TIMEFRAMES) {
+      if (!candleData[timeframe] || candleData[timeframe].length < 20) continue;
+
+      const tfSweep = this.detectLiquiditySweep(candleData[timeframe]);
+      
+      // Boost strength for higher timeframe confirmations
+      if (tfSweep.detected) {
+        let adjustedStrength = tfSweep.strength;
+        
+        if (timeframe === 'H4') adjustedStrength += 20; // H4 confirmation is strongest
+        else if (timeframe === 'H1') adjustedStrength += 10; // H1 confirmation is strong
+        
+        // Check for confluence across timeframes
+        const confluenceBonus = this.calculateTimeframeConfluence(candleData, tfSweep);
+        adjustedStrength += confluenceBonus;
+        
+        if (adjustedStrength > bestSweep.strength) {
+          bestSweep = { ...tfSweep, strength: Math.min(100, adjustedStrength) };
+        }
+      }
+    }
+
+    return bestSweep;
+  }
+
+  /**
+   * Enhanced multi-timeframe Break of Structure detection
+   */
+  public detectBreakOfStructureMultiTimeframe(candleData: Record<string, CandleData[]>): BreakOfStructureResult {
+    let bestBoS: BreakOfStructureResult = { 
+      detected: false, 
+      type: null, 
+      breakLevel: null, 
+      confirmationCandle: null, 
+      strength: 0,
+      previousStructure: [],
+      timeframeConfirmation: {},
+      multiTimeframeStrength: 0
+    };
+
+    const timeframeResults: Record<string, any> = {};
+
+    // Analyze each timeframe
+    for (const timeframe of this.TIMEFRAMES) {
+      if (!candleData[timeframe] || candleData[timeframe].length < 30) continue;
+
+      const tfBoS = this.detectBreakOfStructure(candleData[timeframe]);
+      timeframeResults[timeframe] = tfBoS;
+      
+      if (tfBoS.detected) {
+        let adjustedStrength = tfBoS.strength;
+        
+        // Higher timeframe breaks are more significant
+        if (timeframe === 'H4') adjustedStrength += 25;
+        else if (timeframe === 'H1') adjustedStrength += 15;
+        
+        if (adjustedStrength > bestBoS.strength) {
+          bestBoS = { 
+            ...tfBoS, 
+            strength: Math.min(100, adjustedStrength),
+            timeframeConfirmation: {},
+            multiTimeframeStrength: 0
+          };
+        }
+      }
+    }
+
+    // Calculate multi-timeframe confirmation
+    if (bestBoS.detected) {
+      const confirmations: Record<string, boolean> = {};
+      let confluenceCount = 0;
+      
+      for (const timeframe of this.TIMEFRAMES) {
+        const tfResult = timeframeResults[timeframe];
+        if (tfResult?.detected && tfResult.type === bestBoS.type) {
+          confirmations[timeframe] = true;
+          confluenceCount++;
+        } else {
+          confirmations[timeframe] = false;
+        }
+      }
+      
+      bestBoS.timeframeConfirmation = confirmations;
+      bestBoS.multiTimeframeStrength = (confluenceCount / this.TIMEFRAMES.length) * 100;
+      
+      // Boost overall strength based on multi-timeframe confluence
+      if (confluenceCount >= 2) {
+        bestBoS.strength = Math.min(100, bestBoS.strength + (confluenceCount * 10));
+      }
+    }
+
+    return bestBoS;
+  }
+
+  /**
+   * Enhanced Market Structure Shift detection with partial BOS recognition
+   */
+  public detectMarketStructureShift(candles: CandleData[]): {
+    detected: boolean;
+    type: 'bullish' | 'bearish' | null;
+    strength: number;
+    partialBOS: boolean;
+    complexPattern: boolean;
+    swingSequence: SwingPoint[];
+  } {
+    if (candles.length < 50) {
+      return { 
+        detected: false, 
+        type: null, 
+        strength: 0, 
+        partialBOS: false, 
+        complexPattern: false,
+        swingSequence: []
+      };
+    }
+
+    const swings = this.findSwingPoints(candles, 4); // More sensitive swing detection
+    const recentSwings = swings.slice(-8); // Analyze last 8 swings
+    
+    if (recentSwings.length < 6) {
+      return { 
+        detected: false, 
+        type: null, 
+        strength: 0, 
+        partialBOS: false, 
+        complexPattern: false,
+        swingSequence: recentSwings
+      };
+    }
+
+    // Analyze swing sequences for trend changes
+    const highs = recentSwings.filter(s => s.type === 'high').slice(-4);
+    const lows = recentSwings.filter(s => s.type === 'low').slice(-4);
+    
+    let bullishSignals = 0;
+    let bearishSignals = 0;
+    let partialBOS = false;
+    let complexPattern = false;
+
+    // Check for higher highs and higher lows (bullish MSS)
+    if (highs.length >= 3) {
+      for (let i = 1; i < highs.length; i++) {
+        if (highs[i].price > highs[i-1].price) {
+          bullishSignals++;
+        } else if (highs[i].price > highs[i-1].price * 0.9995) {
+          partialBOS = true; // Near miss, partial break
+        }
+      }
+    }
+
+    if (lows.length >= 3) {
+      for (let i = 1; i < lows.length; i++) {
+        if (lows[i].price > lows[i-1].price) {
+          bullishSignals++;
+        } else if (lows[i].price > lows[i-1].price * 0.9995) {
+          partialBOS = true;
+        }
+      }
+    }
+
+    // Check for lower highs and lower lows (bearish MSS)
+    if (highs.length >= 3) {
+      for (let i = 1; i < highs.length; i++) {
+        if (highs[i].price < highs[i-1].price) {
+          bearishSignals++;
+        }
+      }
+    }
+
+    if (lows.length >= 3) {
+      for (let i = 1; i < lows.length; i++) {
+        if (lows[i].price < lows[i-1].price) {
+          bearishSignals++;
+        }
+      }
+    }
+
+    // Detect complex patterns (mixed signals)
+    if (bullishSignals > 0 && bearishSignals > 0) {
+      complexPattern = true;
+    }
+
+    const totalSignals = bullishSignals + bearishSignals;
+    if (totalSignals === 0) {
+      return { 
+        detected: false, 
+        type: null, 
+        strength: 0, 
+        partialBOS, 
+        complexPattern,
+        swingSequence: recentSwings
+      };
+    }
+
+    const bullishPercentage = (bullishSignals / totalSignals) * 100;
+    let type: 'bullish' | 'bearish' | null = null;
+    let strength = 0;
+
+    if (bullishPercentage >= 70) {
+      type = 'bullish';
+      strength = bullishPercentage;
+    } else if (bullishPercentage <= 30) {
+      type = 'bearish';
+      strength = 100 - bullishPercentage;
+    }
+
+    // Boost strength for clear patterns
+    if (type && !complexPattern) {
+      strength = Math.min(100, strength + 15);
+    }
+
+    return {
+      detected: type !== null && strength >= 60,
+      type,
+      strength,
+      partialBOS,
+      complexPattern,
+      swingSequence: recentSwings
+    };
+  }
+
+  /**
+   * Advanced FVG retest detection
+   */
+  public detectFVGRetest(candles: CandleData[]): {
+    detected: boolean;
+    fvgLevel: number | null;
+    retestConfirmed: boolean;
+    strength: number;
+    direction: 'bullish' | 'bearish' | null;
+  } {
+    if (candles.length < 20) {
+      return { detected: false, fvgLevel: null, retestConfirmed: false, strength: 0, direction: null };
+    }
+
+    const recent = candles.slice(-20);
+    
+    // Find FVGs (Fair Value Gaps)
+    for (let i = 0; i < recent.length - 3; i++) {
+      const candle1 = recent[i];
+      const candle2 = recent[i + 1];
+      const candle3 = recent[i + 2];
+      
+      // Bullish FVG: candle1.high < candle3.low
+      if (candle1.high < candle3.low) {
+        const fvgTop = candle3.low;
+        const fvgBottom = candle1.high;
+        const fvgMid = (fvgTop + fvgBottom) / 2;
+        
+        // Check for retest in subsequent candles
+        for (let j = i + 3; j < recent.length; j++) {
+          const testCandle = recent[j];
+          
+          // Price retested the FVG zone
+          if (testCandle.low <= fvgTop && testCandle.high >= fvgBottom) {
+            // Confirm rejection from FVG
+            if (j < recent.length - 1) {
+              const nextCandle = recent[j + 1];
+              if (nextCandle.close > fvgMid) {
+                return {
+                  detected: true,
+                  fvgLevel: fvgMid,
+                  retestConfirmed: true,
+                  strength: 75,
+                  direction: 'bullish'
+                };
+              }
+            }
+          }
+        }
+      }
+      
+      // Bearish FVG: candle1.low > candle3.high
+      if (candle1.low > candle3.high) {
+        const fvgTop = candle1.low;
+        const fvgBottom = candle3.high;
+        const fvgMid = (fvgTop + fvgBottom) / 2;
+        
+        // Check for retest in subsequent candles
+        for (let j = i + 3; j < recent.length; j++) {
+          const testCandle = recent[j];
+          
+          // Price retested the FVG zone
+          if (testCandle.high >= fvgBottom && testCandle.low <= fvgTop) {
+            // Confirm rejection from FVG
+            if (j < recent.length - 1) {
+              const nextCandle = recent[j + 1];
+              if (nextCandle.close < fvgMid) {
+                return {
+                  detected: true,
+                  fvgLevel: fvgMid,
+                  retestConfirmed: true,
+                  strength: 75,
+                  direction: 'bearish'
+                };
+              }
+            }
+          }
+        }
+      }
+    }
+
+    return { detected: false, fvgLevel: null, retestConfirmed: false, strength: 0, direction: null };
+  }
+
+  /**
+   * Calculate timeframe confluence for liquidity sweeps
+   */
+  private calculateTimeframeConfluence(candleData: Record<string, CandleData[]>, sweep: LiquiditySweepResult): number {
+    let confluenceBonus = 0;
+    let confirmingTimeframes = 0;
+
+    for (const timeframe of this.TIMEFRAMES) {
+      if (!candleData[timeframe] || timeframe === 'M15') continue; // Skip base timeframe
+      
+      const tfSweep = this.detectLiquiditySweep(candleData[timeframe]);
+      
+      if (tfSweep.detected && 
+          tfSweep.sweptType === sweep.sweptType && 
+          Math.abs((tfSweep.sweptLevel || 0) - (sweep.sweptLevel || 0)) / (sweep.sweptLevel || 1) < 0.001) {
+        confirmingTimeframes++;
+      }
+    }
+
+    // Bonus for each confirming timeframe
+    confluenceBonus = confirmingTimeframes * 15;
+    
+    return confluenceBonus;
+  }
   /**
    * Identifies swing points (highs and lows) in the price data
    */
