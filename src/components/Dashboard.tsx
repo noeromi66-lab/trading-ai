@@ -55,6 +55,7 @@ export default function Dashboard() {
 
   async function loadSignals() {
     setLoading(true);
+    setError(null);
     try {
       let query = supabase
         .from('signals')
@@ -78,10 +79,25 @@ export default function Dashboard() {
         }
       }
 
-      const { data } = await query;
+      const { data, error: queryError } = await query;
+      
+      if (queryError) {
+        console.error('Supabase query error:', queryError);
+        throw new Error(`Database error: ${queryError.message}`);
+      }
+      
       setSignals(data || []);
     } catch (err) {
       console.error('Failed to load signals:', err);
+      if (err instanceof Error) {
+        if (err.message.includes('Failed to fetch')) {
+          setError('Unable to connect to the database. Please check your internet connection and try again.');
+        } else {
+          setError(`Failed to load signals: ${err.message}`);
+        }
+      } else {
+        setError('An unexpected error occurred while loading signals.');
+      }
     } finally {
       setLoading(false);
     }
