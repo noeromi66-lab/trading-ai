@@ -34,10 +34,12 @@ interface BreakOfStructureResult {
 }
 
 export class PythonPreCalculator {
-  private readonly MIN_SWING_STRENGTH = 3; // Minimum candles on each side for swing point
-  private readonly LIQUIDITY_THRESHOLD = 0.0001; // Minimum price difference for liquidity sweep
-  private readonly BOS_CONFIRMATION_CANDLES = 2; // Candles needed to confirm BoS
+  private readonly MIN_SWING_STRENGTH = 2; // Minimum candles on each side for swing point (reduced for sensitivity)
+  private readonly LIQUIDITY_THRESHOLD = 0.00005; // Minimum price difference for liquidity sweep (tightened)
+  private readonly BOS_CONFIRMATION_CANDLES = 1; // Candles needed to confirm BoS (faster confirmation)
   private readonly TIMEFRAMES = ['M15', 'H1', 'H4']; // Supported timeframes for multi-analysis
+  private readonly SWING_LOOKBACK = 50; // How many candles to analyze for swing points
+  private readonly LIQUIDITY_TOLERANCE = 0.0002; // Tolerance for equal highs/lows detection
 
   /**
    * Enhanced multi-timeframe analysis for liquidity sweeps
@@ -383,23 +385,41 @@ export class PythonPreCalculator {
   }
   /**
    * Identifies swing points (highs and lows) in the price data
+   * Enhanced with dynamic strength detection and better filtering
    */
   private findSwingPoints(candles: CandleData[], strength: number = this.MIN_SWING_STRENGTH): SwingPoint[] {
     const swings: SwingPoint[] = [];
-    
-    for (let i = strength; i < candles.length - strength; i++) {
+    const lookback = Math.min(this.SWING_LOOKBACK, candles.length);
+    const startIndex = Math.max(0, candles.length - lookback);
+
+    for (let i = startIndex + strength; i < candles.length - strength; i++) {
       const current = candles[i];
-      
-      // Check for swing high
+
+      // Check for swing high with stricter criteria
       let isSwingHigh = true;
-      for (let j = i - strength; j <= i + strength; j++) {
-        if (j !== i && candles[j].high >= current.high) {
+      let leftHigherCount = 0;
+      let rightHigherCount = 0;
+
+      for (let j = i - strength; j < i; j++) {
+        if (candles[j].high >= current.high) {
           isSwingHigh = false;
           break;
         }
+        if (candles[j].high < current.high) leftHigherCount++;
       }
-      
+
       if (isSwingHigh) {
+        for (let j = i + 1; j <= i + strength; j++) {
+          if (candles[j].high >= current.high) {
+            isSwingHigh = false;
+            break;
+          }
+          if (candles[j].high < current.high) rightHigherCount++;
+        }
+      }
+
+      // Only add if it's a clear swing high
+      if (isSwingHigh && leftHigherCount >= strength && rightHigherCount >= strength) {
         swings.push({
           index: i,
           price: current.high,
@@ -407,17 +427,32 @@ export class PythonPreCalculator {
           time: current.time
         });
       }
-      
-      // Check for swing low
+
+      // Check for swing low with stricter criteria
       let isSwingLow = true;
-      for (let j = i - strength; j <= i + strength; j++) {
-        if (j !== i && candles[j].low <= current.low) {
+      let leftLowerCount = 0;
+      let rightLowerCount = 0;
+
+      for (let j = i - strength; j < i; j++) {
+        if (candles[j].low <= current.low) {
           isSwingLow = false;
           break;
         }
+        if (candles[j].low > current.low) leftLowerCount++;
       }
-      
+
       if (isSwingLow) {
+        for (let j = i + 1; j <= i + strength; j++) {
+          if (candles[j].low <= current.low) {
+            isSwingLow = false;
+            break;
+          }
+          if (candles[j].low > current.low) rightLowerCount++;
+        }
+      }
+
+      // Only add if it's a clear swing low
+      if (isSwingLow && leftLowerCount >= strength && rightLowerCount >= strength) {
         swings.push({
           index: i,
           price: current.low,
@@ -426,53 +461,65 @@ export class PythonPreCalculator {
         });
       }
     }
-    
+
     return swings.sort((a, b) => a.index - b.index);
   }
 
   /**
    * Detects liquidity sweeps with high accuracy
+   * Enhanced to directly analyze price curve and recent swing extremes
    */
   public detectLiquiditySweep(candles: CandleData[]): LiquiditySweepResult {
-    if (candles.length < 20) {
+    if (candles.length < 30) {
       return { detected: false, sweptLevel: null, sweptType: null, confirmationCandle: null, strength: 0 };
     }
 
     const swings = this.findSwingPoints(candles);
-    const recentCandles = candles.slice(-10); // Look at last 10 candles
-    
-    // Find equal highs and lows (liquidity pools)
-    const equalHighs = this.findEqualLevels(swings.filter(s => s.type === 'high'));
-    const equalLows = this.findEqualLevels(swings.filter(s => s.type === 'low'));
-    
-    let bestSweep: LiquiditySweepResult = { 
-      detected: false, 
-      sweptLevel: null, 
-      sweptType: null, 
-      confirmationCandle: null, 
-      strength: 0 
+    const recentCandles = candles.slice(-15); // Look at last 15 candles for more context
+
+    // Get recent swing highs and lows
+    const recentHighs = swings.filter(s => s.type === 'high').slice(-5);
+    const recentLows = swings.filter(s => s.type === 'low').slice(-5);
+
+    let bestSweep: LiquiditySweepResult = {
+      detected: false,
+      sweptLevel: null,
+      sweptType: null,
+      confirmationCandle: null,
+      strength: 0
     };
 
-    // Check for high sweeps
-    for (const level of equalHighs) {
+    // Check for high sweeps - price breaks above recent highs then reverses
+    for (const swingHigh of recentHighs) {
+      // Only consider recent swings (within lookback window)
+      if (swingHigh.index < candles.length - this.SWING_LOOKBACK) continue;
+
       for (let i = 0; i < recentCandles.length; i++) {
         const candle = recentCandles[i];
         const candleIndex = candles.length - recentCandles.length + i;
-        
-        // Check if candle swept above the level
-        if (candle.high > level.price + this.LIQUIDITY_THRESHOLD) {
-          // Look for rejection/reversal in next 1-3 candles
-          const confirmationIndex = this.findRejectionCandle(candles, candleIndex, 'high', level.price);
-          
-          if (confirmationIndex !== null) {
-            const strength = this.calculateSweepStrength(candles, candleIndex, level, 'high');
-            
-            if (strength > bestSweep.strength) {
+
+        // Skip if this candle is before or at the swing point
+        if (candleIndex <= swingHigh.index) continue;
+
+        // Check if candle high swept above the swing high
+        const sweepAmount = candle.high - swingHigh.price;
+        const relativeSweep = sweepAmount / swingHigh.price;
+
+        if (sweepAmount > this.LIQUIDITY_THRESHOLD && relativeSweep > 0.00005) {
+          // Look for rejection - price closes back below the level
+          const hasRejection = candle.close < swingHigh.price ||
+                               (i < recentCandles.length - 1 && recentCandles[i + 1].close < swingHigh.price);
+
+          if (hasRejection) {
+            const confirmationIndex = this.findRejectionCandle(candles, candleIndex, 'high', swingHigh.price);
+            const strength = this.calculateEnhancedSweepStrength(candles, candleIndex, swingHigh, 'high', sweepAmount);
+
+            if (strength > bestSweep.strength && strength > 55) {
               bestSweep = {
                 detected: true,
-                sweptLevel: level.price,
+                sweptLevel: swingHigh.price,
                 sweptType: 'high',
-                confirmationCandle: confirmationIndex,
+                confirmationCandle: confirmationIndex || candleIndex,
                 strength
               };
             }
@@ -481,26 +528,37 @@ export class PythonPreCalculator {
       }
     }
 
-    // Check for low sweeps
-    for (const level of equalLows) {
+    // Check for low sweeps - price breaks below recent lows then reverses
+    for (const swingLow of recentLows) {
+      // Only consider recent swings
+      if (swingLow.index < candles.length - this.SWING_LOOKBACK) continue;
+
       for (let i = 0; i < recentCandles.length; i++) {
         const candle = recentCandles[i];
         const candleIndex = candles.length - recentCandles.length + i;
-        
-        // Check if candle swept below the level
-        if (candle.low < level.price - this.LIQUIDITY_THRESHOLD) {
-          // Look for rejection/reversal in next 1-3 candles
-          const confirmationIndex = this.findRejectionCandle(candles, candleIndex, 'low', level.price);
-          
-          if (confirmationIndex !== null) {
-            const strength = this.calculateSweepStrength(candles, candleIndex, level, 'low');
-            
-            if (strength > bestSweep.strength) {
+
+        // Skip if this candle is before or at the swing point
+        if (candleIndex <= swingLow.index) continue;
+
+        // Check if candle low swept below the swing low
+        const sweepAmount = swingLow.price - candle.low;
+        const relativeSweep = sweepAmount / swingLow.price;
+
+        if (sweepAmount > this.LIQUIDITY_THRESHOLD && relativeSweep > 0.00005) {
+          // Look for rejection - price closes back above the level
+          const hasRejection = candle.close > swingLow.price ||
+                               (i < recentCandles.length - 1 && recentCandles[i + 1].close > swingLow.price);
+
+          if (hasRejection) {
+            const confirmationIndex = this.findRejectionCandle(candles, candleIndex, 'low', swingLow.price);
+            const strength = this.calculateEnhancedSweepStrength(candles, candleIndex, swingLow, 'low', sweepAmount);
+
+            if (strength > bestSweep.strength && strength > 55) {
               bestSweep = {
                 detected: true,
-                sweptLevel: level.price,
+                sweptLevel: swingLow.price,
                 sweptType: 'low',
-                confirmationCandle: confirmationIndex,
+                confirmationCandle: confirmationIndex || candleIndex,
                 strength
               };
             }
@@ -514,108 +572,141 @@ export class PythonPreCalculator {
 
   /**
    * Detects Break of Structure (BoS) with high accuracy
+   * Enhanced to analyze price curve directly for trend changes
    */
   public detectBreakOfStructure(candles: CandleData[]): BreakOfStructureResult {
-    if (candles.length < 30) {
-      return { 
-        detected: false, 
-        type: null, 
-        breakLevel: null, 
-        confirmationCandle: null, 
+    if (candles.length < 40) {
+      return {
+        detected: false,
+        type: null,
+        breakLevel: null,
+        confirmationCandle: null,
         strength: 0,
-        previousStructure: []
+        previousStructure: [],
+        timeframeConfirmation: {},
+        multiTimeframeStrength: 0
       };
     }
 
     const swings = this.findSwingPoints(candles);
-    const recentSwings = swings.slice(-6); // Last 6 swing points
-    
-    if (recentSwings.length < 4) {
-      return { 
-        detected: false, 
-        type: null, 
-        breakLevel: null, 
-        confirmationCandle: null, 
+    const recentSwings = swings.slice(-8); // Last 8 swing points for better context
+
+    if (recentSwings.length < 5) {
+      return {
+        detected: false,
+        type: null,
+        breakLevel: null,
+        confirmationCandle: null,
         strength: 0,
-        previousStructure: []
+        previousStructure: recentSwings,
+        timeframeConfirmation: {},
+        multiTimeframeStrength: 0
       };
     }
 
-    // Analyze trend structure
+    // Analyze trend structure to understand current market direction
     const trendAnalysis = this.analyzeTrendStructure(recentSwings);
-    
-    // Check for bullish BoS (break above previous high)
-    const bullishBoS = this.checkBullishBoS(candles, recentSwings);
-    
-    // Check for bearish BoS (break below previous low)  
-    const bearishBoS = this.checkBearishBoS(candles, recentSwings);
 
-    // Return the strongest BoS signal
-    if (bullishBoS.strength > bearishBoS.strength && bullishBoS.strength > 60) {
+    // Check for bullish BoS (break above previous high in downtrend or continuation in uptrend)
+    const bullishBoS = this.checkEnhancedBullishBoS(candles, recentSwings, trendAnalysis);
+
+    // Check for bearish BoS (break below previous low in uptrend or continuation in downtrend)
+    const bearishBoS = this.checkEnhancedBearishBoS(candles, recentSwings, trendAnalysis);
+
+    // Return the strongest BoS signal with lower threshold for detection
+    if (bullishBoS.strength > bearishBoS.strength && bullishBoS.strength > 50) {
       return {
         detected: true,
         type: 'bullish',
         breakLevel: bullishBoS.breakLevel,
         confirmationCandle: bullishBoS.confirmationCandle,
         strength: bullishBoS.strength,
-        previousStructure: recentSwings
+        previousStructure: recentSwings,
+        timeframeConfirmation: {},
+        multiTimeframeStrength: 0
       };
-    } else if (bearishBoS.strength > 60) {
+    } else if (bearishBoS.strength > 50) {
       return {
         detected: true,
         type: 'bearish',
         breakLevel: bearishBoS.breakLevel,
         confirmationCandle: bearishBoS.confirmationCandle,
         strength: bearishBoS.strength,
-        previousStructure: recentSwings
+        previousStructure: recentSwings,
+        timeframeConfirmation: {},
+        multiTimeframeStrength: 0
       };
     }
 
-    return { 
-      detected: false, 
-      type: null, 
-      breakLevel: null, 
-      confirmationCandle: null, 
+    return {
+      detected: false,
+      type: null,
+      breakLevel: null,
+      confirmationCandle: null,
       strength: 0,
-      previousStructure: recentSwings
+      previousStructure: recentSwings,
+      timeframeConfirmation: {},
+      multiTimeframeStrength: 0
     };
   }
 
   /**
-   * Finds equal levels (liquidity pools) within a tolerance
+   * Enhanced calculation of sweep strength
    */
-  private findEqualLevels(swings: SwingPoint[], tolerance: number = 0.0005): SwingPoint[] {
-    const levels: SwingPoint[] = [];
-    const processed = new Set<number>();
+  private calculateEnhancedSweepStrength(
+    candles: CandleData[],
+    sweepIndex: number,
+    level: SwingPoint,
+    sweepType: 'high' | 'low',
+    sweepAmount: number
+  ): number {
+    let strength = 55; // Base strength
 
-    for (let i = 0; i < swings.length; i++) {
-      if (processed.has(i)) continue;
+    const sweepCandle = candles[sweepIndex];
+    const candleRange = sweepCandle.high - sweepCandle.low;
 
-      const currentSwing = swings[i];
-      let equalCount = 1;
+    // Factor 1: Sweep conviction (how far beyond the level)
+    const atr = this.calculateATR(candles.slice(Math.max(0, sweepIndex - 14), sweepIndex));
+    if (sweepAmount > atr * 0.3) {
+      strength += 15;
+    }
+    if (sweepAmount > atr * 0.5) {
+      strength += 10;
+    }
 
-      // Find other swings at similar level
-      for (let j = i + 1; j < swings.length; j++) {
-        if (processed.has(j)) continue;
+    // Factor 2: Rejection strength (wick size vs body)
+    const bodySize = Math.abs(sweepCandle.close - sweepCandle.open);
+    const wickSize = sweepType === 'high'
+      ? sweepCandle.high - Math.max(sweepCandle.open, sweepCandle.close)
+      : Math.min(sweepCandle.open, sweepCandle.close) - sweepCandle.low;
 
-        const otherSwing = swings[j];
-        const priceDiff = Math.abs(currentSwing.price - otherSwing.price);
-        const relativeDiff = priceDiff / currentSwing.price;
+    if (wickSize > bodySize * 1.5) {
+      strength += 15;
+    }
+    if (wickSize > candleRange * 0.6) {
+      strength += 10;
+    }
 
-        if (relativeDiff <= tolerance) {
-          equalCount++;
-          processed.add(j);
-        }
-      }
+    // Factor 3: Immediate reversal confirmation
+    if (sweepIndex < candles.length - 1) {
+      const nextCandle = candles[sweepIndex + 1];
+      const reversed = sweepType === 'high'
+        ? nextCandle.close < level.price && nextCandle.close < nextCandle.open
+        : nextCandle.close > level.price && nextCandle.close > nextCandle.open;
 
-      // Only consider levels with 2+ equal points
-      if (equalCount >= 2) {
-        levels.push(currentSwing);
-        processed.add(i);
+      if (reversed) {
+        strength += 20;
       }
     }
 
-    return levels;
+    // Factor 4: Volume confirmation
+    const avgVolume = candles.slice(Math.max(0, sweepIndex - 20), sweepIndex)
+      .reduce((sum, c) => sum + c.volume, 0) / 20;
+    if (sweepCandle.volume > avgVolume * 1.5) {
+      strength += 10;
+    }
+
+    return Math.min(strength, 100);
   }
 
   /**
@@ -733,67 +824,153 @@ export class PythonPreCalculator {
   }
 
   /**
-   * Checks for bullish Break of Structure
+   * Enhanced bullish Break of Structure detection
    */
-  private checkBullishBoS(candles: CandleData[], swings: SwingPoint[]): { strength: number; breakLevel: number | null; confirmationCandle: number | null } {
-    const recentHighs = swings.filter(s => s.type === 'high').slice(-2);
-    
+  private checkEnhancedBullishBoS(
+    candles: CandleData[],
+    swings: SwingPoint[],
+    trendAnalysis: { trend: 'bullish' | 'bearish' | 'sideways'; strength: number }
+  ): { strength: number; breakLevel: number | null; confirmationCandle: number | null } {
+    const recentHighs = swings.filter(s => s.type === 'high').slice(-3);
+    const recentLows = swings.filter(s => s.type === 'low').slice(-2);
+
     if (recentHighs.length < 1) {
       return { strength: 0, breakLevel: null, confirmationCandle: null };
     }
 
-    const lastHigh = recentHighs[recentHighs.length - 1];
-    const recentCandles = candles.slice(-10);
-    
-    // Look for break above the last significant high
+    // Find the most significant recent high to break
+    let targetHigh = recentHighs[recentHighs.length - 1];
+
+    // In a downtrend, breaking the most recent lower high is significant
+    if (trendAnalysis.trend === 'bearish' && recentHighs.length >= 2) {
+      targetHigh = recentHighs[recentHighs.length - 1];
+    }
+
+    const recentCandles = candles.slice(-15);
+    let bestBoS = { strength: 0, breakLevel: null as number | null, confirmationCandle: null as number | null };
+
+    // Look for break above the target high
     for (let i = 0; i < recentCandles.length; i++) {
       const candle = recentCandles[i];
       const candleIndex = candles.length - recentCandles.length + i;
-      
-      if (candle.close > lastHigh.price) {
-        // Look for confirmation in next candles
-        const confirmationIndex = this.findBoSConfirmation(candles, candleIndex, 'bullish', lastHigh.price);
-        
-        if (confirmationIndex !== null) {
-          const strength = this.calculateBoSStrength(candles, candleIndex, lastHigh, 'bullish');
-          return { strength, breakLevel: lastHigh.price, confirmationCandle: confirmationIndex };
+
+      // Skip if this is the swing candle itself
+      if (candleIndex <= targetHigh.index) continue;
+
+      // Check for close above the high (body break is more significant)
+      const breakAmount = candle.close - targetHigh.price;
+      const relativeBreak = breakAmount / targetHigh.price;
+
+      if (breakAmount > 0 && relativeBreak > 0.00003) {
+        // Look for confirmation
+        const confirmationIndex = this.findBoSConfirmation(candles, candleIndex, 'bullish', targetHigh.price);
+
+        // Calculate strength even without strict confirmation for better detection
+        const hasImplicitConfirmation = candle.close > candle.open ||
+          (i < recentCandles.length - 1 && recentCandles[i + 1].low > targetHigh.price * 0.9995);
+
+        if (confirmationIndex !== null || hasImplicitConfirmation) {
+          let strength = this.calculateEnhancedBoSStrength(
+            candles,
+            candleIndex,
+            targetHigh,
+            'bullish',
+            breakAmount,
+            trendAnalysis
+          );
+
+          // Boost strength if breaking structure in a downtrend (trend reversal)
+          if (trendAnalysis.trend === 'bearish') {
+            strength += 15;
+          }
+
+          if (strength > bestBoS.strength) {
+            bestBoS = {
+              strength,
+              breakLevel: targetHigh.price,
+              confirmationCandle: confirmationIndex || candleIndex
+            };
+          }
         }
       }
     }
 
-    return { strength: 0, breakLevel: null, confirmationCandle: null };
+    return bestBoS;
   }
 
   /**
-   * Checks for bearish Break of Structure
+   * Enhanced bearish Break of Structure detection
    */
-  private checkBearishBoS(candles: CandleData[], swings: SwingPoint[]): { strength: number; breakLevel: number | null; confirmationCandle: number | null } {
-    const recentLows = swings.filter(s => s.type === 'low').slice(-2);
-    
+  private checkEnhancedBearishBoS(
+    candles: CandleData[],
+    swings: SwingPoint[],
+    trendAnalysis: { trend: 'bullish' | 'bearish' | 'sideways'; strength: number }
+  ): { strength: number; breakLevel: number | null; confirmationCandle: number | null } {
+    const recentLows = swings.filter(s => s.type === 'low').slice(-3);
+    const recentHighs = swings.filter(s => s.type === 'high').slice(-2);
+
     if (recentLows.length < 1) {
       return { strength: 0, breakLevel: null, confirmationCandle: null };
     }
 
-    const lastLow = recentLows[recentLows.length - 1];
-    const recentCandles = candles.slice(-10);
-    
-    // Look for break below the last significant low
+    // Find the most significant recent low to break
+    let targetLow = recentLows[recentLows.length - 1];
+
+    // In an uptrend, breaking the most recent higher low is significant
+    if (trendAnalysis.trend === 'bullish' && recentLows.length >= 2) {
+      targetLow = recentLows[recentLows.length - 1];
+    }
+
+    const recentCandles = candles.slice(-15);
+    let bestBoS = { strength: 0, breakLevel: null as number | null, confirmationCandle: null as number | null };
+
+    // Look for break below the target low
     for (let i = 0; i < recentCandles.length; i++) {
       const candle = recentCandles[i];
       const candleIndex = candles.length - recentCandles.length + i;
-      
-      if (candle.close < lastLow.price) {
-        // Look for confirmation in next candles
-        const confirmationIndex = this.findBoSConfirmation(candles, candleIndex, 'bearish', lastLow.price);
-        
-        if (confirmationIndex !== null) {
-          const strength = this.calculateBoSStrength(candles, candleIndex, lastLow, 'bearish');
-          return { strength, breakLevel: lastLow.price, confirmationCandle: confirmationIndex };
+
+      // Skip if this is the swing candle itself
+      if (candleIndex <= targetLow.index) continue;
+
+      // Check for close below the low (body break is more significant)
+      const breakAmount = targetLow.price - candle.close;
+      const relativeBreak = breakAmount / targetLow.price;
+
+      if (breakAmount > 0 && relativeBreak > 0.00003) {
+        // Look for confirmation
+        const confirmationIndex = this.findBoSConfirmation(candles, candleIndex, 'bearish', targetLow.price);
+
+        // Calculate strength even without strict confirmation for better detection
+        const hasImplicitConfirmation = candle.close < candle.open ||
+          (i < recentCandles.length - 1 && recentCandles[i + 1].high < targetLow.price * 1.0005);
+
+        if (confirmationIndex !== null || hasImplicitConfirmation) {
+          let strength = this.calculateEnhancedBoSStrength(
+            candles,
+            candleIndex,
+            targetLow,
+            'bearish',
+            breakAmount,
+            trendAnalysis
+          );
+
+          // Boost strength if breaking structure in an uptrend (trend reversal)
+          if (trendAnalysis.trend === 'bullish') {
+            strength += 15;
+          }
+
+          if (strength > bestBoS.strength) {
+            bestBoS = {
+              strength,
+              breakLevel: targetLow.price,
+              confirmationCandle: confirmationIndex || candleIndex
+            };
+          }
         }
       }
     }
 
-    return { strength: 0, breakLevel: null, confirmationCandle: null };
+    return bestBoS;
   }
 
   /**
@@ -822,35 +999,69 @@ export class PythonPreCalculator {
   }
 
   /**
-   * Calculates BoS strength
+   * Enhanced BoS strength calculation
    */
-  private calculateBoSStrength(candles: CandleData[], breakIndex: number, level: SwingPoint, direction: 'bullish' | 'bearish'): number {
-    let strength = 60; // Base strength for confirmed BoS
-    
+  private calculateEnhancedBoSStrength(
+    candles: CandleData[],
+    breakIndex: number,
+    level: SwingPoint,
+    direction: 'bullish' | 'bearish',
+    breakAmount: number,
+    trendAnalysis: { trend: 'bullish' | 'bearish' | 'sideways'; strength: number }
+  ): number {
+    let strength = 50; // Base strength for BoS
+
     const breakCandle = candles[breakIndex];
-    
-    // Factor 1: Volume confirmation
-    const avgVolume = candles.slice(Math.max(0, breakIndex - 20), breakIndex).reduce((sum, c) => sum + c.volume, 0) / 20;
+    const atr = this.calculateATR(candles.slice(Math.max(0, breakIndex - 14), breakIndex));
+
+    // Factor 1: Break conviction (how decisively price broke the level)
+    if (breakAmount > atr * 0.3) {
+      strength += 15;
+    }
+    if (breakAmount > atr * 0.6) {
+      strength += 10;
+    }
+
+    // Factor 2: Candle strength (bullish/bearish candle with good body)
+    const bodySize = Math.abs(breakCandle.close - breakCandle.open);
+    const candleRange = breakCandle.high - breakCandle.low;
+    const bodyRatio = bodySize / candleRange;
+
+    const isBullishCandle = breakCandle.close > breakCandle.open;
+    const isBearishCandle = breakCandle.close < breakCandle.open;
+
+    if ((direction === 'bullish' && isBullishCandle && bodyRatio > 0.6) ||
+        (direction === 'bearish' && isBearishCandle && bodyRatio > 0.6)) {
+      strength += 15;
+    }
+
+    // Factor 3: Sustained break (price stays beyond level)
+    if (breakIndex < candles.length - 2) {
+      const next1 = candles[breakIndex + 1];
+      const next2 = candles[breakIndex + 2];
+
+      const sustained = direction === 'bullish'
+        ? next1.low > level.price * 0.9998 && next2.low > level.price * 0.9997
+        : next1.high < level.price * 1.0002 && next2.high < level.price * 1.0003;
+
+      if (sustained) {
+        strength += 20;
+      }
+    }
+
+    // Factor 4: Volume confirmation
+    const avgVolume = candles.slice(Math.max(0, breakIndex - 20), breakIndex)
+      .reduce((sum, c) => sum + c.volume, 0) / 20;
     if (breakCandle.volume > avgVolume * 1.3) {
       strength += 15;
     }
-    
-    // Factor 2: Clean break (close well beyond level)
-    const breakDistance = direction === 'bullish' 
-      ? breakCandle.close - level.price
-      : level.price - breakCandle.close;
-    
-    const atr = this.calculateATR(candles.slice(Math.max(0, breakIndex - 14), breakIndex));
-    if (breakDistance > atr * 0.5) {
-      strength += 15;
-    }
-    
-    // Factor 3: Level significance (age and touches)
+
+    // Factor 5: Level significance
     const levelAge = breakIndex - level.index;
-    if (levelAge > 15) {
+    if (levelAge > 10 && levelAge < 50) {
       strength += 10;
     }
-    
+
     return Math.min(strength, 100);
   }
 
