@@ -134,6 +134,8 @@ jobs:
 
 2. **Configure API keys in `.env`:**
    ```
+   VITE_SUPABASE_URL=https://wumtsgpybpwtvqierlxr.supabase.co
+   VITE_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Ind1bXRzZ3B5YnB3dHZxaWVybHhyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3MzQ5NzI4NzQsImV4cCI6MjA1MDU0ODg3NH0.Ej8Ej8Ej8Ej8Ej8Ej8Ej8Ej8Ej8Ej8Ej8Ej8Ej8Ej8
    VITE_POLYGON_API_KEY=your_key_here
    VITE_OPENAI_API_KEY=your_key_here  # Optional
    ```
