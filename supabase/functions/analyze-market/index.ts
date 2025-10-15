@@ -261,6 +261,7 @@ function generateMockCandles(symbol: string, count: number = 500): Candle[] {
 
 function analyzeAllStrategies(candles: Candle[], useSecretStrategy: boolean = false): any {
   const recent = candles.slice(-20);
+  const extended = candles.slice(-100); // Plus de données pour une meilleure analyse
   const lastCandle = candles[candles.length - 1];
   const prevCandle = candles[candles.length - 2];
   
@@ -268,18 +269,100 @@ function analyzeAllStrategies(candles: Candle[], useSecretStrategy: boolean = fa
   const criteriaFailed: Record<string, boolean> = {};
   
   // Enhanced analysis with more historical data
-  const extended = candles.slice(-50); // Use more data for better analysis
   const highestHigh = Math.max(...extended.map(c => c.high));
   const lowestLow = Math.min(...extended.map(c => c.low));
   
-  // Improved liquidity sweep detection
-  const sweepDetected = recent.some(c => 
-    (c.high > highestHigh * 1.001 && c.close < highestHigh) ||
-    (c.low < lowestLow * 0.999 && c.close > lowestLow)
-  );
+  // LIQUIDITY SWEEP DETECTION AVANCÉE
+  let liquiditySweepDetected = false;
+  let sweepDescription = '';
   
-  if (sweepDetected) criteriaPassed.liquidity_sweep = true;
-  else criteriaFailed.liquidity_sweep = true;
+  // Trouve les swing points récents
+  const swingHighs: number[] = [];
+  const swingLows: number[] = [];
+  
+  for (let i = 5; i < extended.length - 5; i++) {
+    const isHigh = extended.slice(i-5, i+6).every((c, idx) => idx === 5 || c.high <= extended[i].high);
+    const isLow = extended.slice(i-5, i+6).every((c, idx) => idx === 5 || c.low >= extended[i].low);
+    
+    if (isHigh) swingHighs.push(extended[i].high);
+    if (isLow) swingLows.push(extended[i].low);
+  }
+  
+  // Vérifie les sweeps dans les 15 dernières bougies
+  const recentCandles = candles.slice(-15);
+  for (const candle of recentCandles) {
+    // Sweep de high: prix dépasse puis ferme en dessous
+    for (const high of swingHighs.slice(-3)) {
+      if (candle.high > high && candle.close < high * 0.9998) {
+        liquiditySweepDetected = true;
+        sweepDescription = `Liquidity sweep HIGH détecté à ${high.toFixed(5)}`;
+        break;
+      }
+    }
+    // Sweep de low: prix passe sous puis ferme au dessus
+    for (const low of swingLows.slice(-3)) {
+      if (candle.low < low && candle.close > low * 1.0002) {
+        liquiditySweepDetected = true;
+        sweepDescription = `Liquidity sweep LOW détecté à ${low.toFixed(5)}`;
+        break;
+      }
+    }
+  }
+  
+  if (liquiditySweepDetected) {
+    criteriaPassed.liquidity_sweep = true;
+  } else {
+    criteriaFailed.liquidity_sweep = true;
+  }
+  
+  // BREAK OF STRUCTURE DETECTION AVANCÉE
+  let bosDetected = false;
+  let bosType: 'bullish' | 'bearish' | null = null;
+  let bosDescription = '';
+  
+  // Analyse la structure récente
+  const recentHighs = swingHighs.slice(-3);
+  const recentLows = swingLows.slice(-3);
+  const currentPrice = lastCandle.close;
+  
+  // BOS Bullish: fermeture au dessus du dernier swing high significatif
+  if (recentHighs.length > 0) {
+    const lastSignificantHigh = Math.max(...recentHighs);
+    if (currentPrice > lastSignificantHigh * 1.0003) { // 3 pips de marge
+      // Vérifie la confirmation avec les 2-3 dernières bougies
+      const confirmationCandles = recent.slice(-3);
+      const confirmed = confirmationCandles.every(c => c.close > lastSignificantHigh * 0.9997);
+      
+      if (confirmed) {
+        bosDetected = true;
+        bosType = 'bullish';
+        bosDescription = `Break of Structure BULLISH confirmé au dessus de ${lastSignificantHigh.toFixed(5)}`;
+      }
+    }
+  }
+  
+  // BOS Bearish: fermeture en dessous du dernier swing low significatif
+  if (!bosDetected && recentLows.length > 0) {
+    const lastSignificantLow = Math.min(...recentLows);
+    if (currentPrice < lastSignificantLow * 0.9997) { // 3 pips de marge
+      // Vérifie la confirmation avec les 2-3 dernières bougies
+      const confirmationCandles = recent.slice(-3);
+      const confirmed = confirmationCandles.every(c => c.close < lastSignificantLow * 1.0003);
+      
+      if (confirmed) {
+        bosDetected = true;
+        bosType = 'bearish';
+        bosDescription = `Break of Structure BEARISH confirmé en dessous de ${lastSignificantLow.toFixed(5)}`;
+      }
+    }
+  }
+  
+  if (bosDetected) {
+    criteriaPassed.break_of_structure = true;
+  } else {
+    criteriaFailed.break_of_structure = true;
+  }
+  );
   
   // Enhanced order block detection with more data
   const avgVolume = extended.reduce((sum, c) => sum + c.volume, 0) / extended.length;
@@ -308,11 +391,6 @@ function analyzeAllStrategies(candles: Candle[], useSecretStrategy: boolean = fa
   if (fvgDetected) criteriaPassed.fair_value_gap = true;
   else criteriaFailed.fair_value_gap = true;
   
-  // Enhanced BoS detection
-  const bosDetected = (lastCandle.close > highestHigh * 1.0005) || (lastCandle.close < lowestLow * 0.9995);
-  if (bosDetected) criteriaPassed.break_of_structure = true;
-  else criteriaFailed.break_of_structure = true;
-  
   const utcHour = new Date().getUTCHours();
   const isKillzone = (utcHour >= 7 && utcHour < 10) || (utcHour >= 12 && utcHour < 15);
   if (isKillzone) criteriaPassed.in_killzone = true;
@@ -334,7 +412,7 @@ function analyzeAllStrategies(candles: Candle[], useSecretStrategy: boolean = fa
     };
   }
   
-  const signal = lastCandle.close > prevCandle.close ? 'BUY' : 'SELL';
+  const signal = bosType || (lastCandle.close > prevCandle.close ? 'BUY' : 'SELL');
   let confidence = (passedCount / totalCriteria) * 100;
   
   // SECRET Strategy bonus: Higher confidence when all criteria align
@@ -371,7 +449,11 @@ function analyzeAllStrategies(candles: Candle[], useSecretStrategy: boolean = fa
   
   const explanation = useSecretStrategy
     ? `SECRET Strategy ACTIVATED: Perfect ${signal.toLowerCase()} setup with ${passedCount}/5 institutional confirmations. This is the exact methodology that achieves 90%+ win rates. All systems aligned - execute with confidence.`
-    : `Beautiful ${signal.toLowerCase()} confluence here! ${passedCount} of 5 institutional signals are firing - this is exactly what we hunt for. Clean smart money footprints with excellent risk-reward. The market is showing its hand, and we're positioned to capitalize.`;
+    : `Analyse SMC avancée: ${signal.toLowerCase()} setup avec ${passedCount}/5 confirmations institutionnelles. ${
+        liquiditySweepDetected ? sweepDescription + '. ' : ''
+      }${
+        bosDetected ? bosDescription + '. ' : ''
+      }Smart money footprints détectés avec précision.`;
 
   return {
     signal,

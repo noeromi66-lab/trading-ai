@@ -1,4 +1,5 @@
 import type { Candle, StrategyResult, SwingPoint } from '../types';
+import { advancedSMCDetector } from '../modules/advancedSMCDetector';
 
 export function findSwingPoints(candles: Candle[], lookback: number = 5): SwingPoint[] {
   const swings: SwingPoint[] = [];
@@ -17,49 +18,6 @@ export function findSwingPoints(candles: Candle[], lookback: number = 5): SwingP
   return swings;
 }
 
-function detectSimpleLiquiditySweep(candles: Candle[]) {
-  const swings = findSwingPoints(candles, 3);
-  const recent = candles.slice(-20);
-
-  for (const swing of swings.slice(-5)) {
-    for (let i = 0; i < recent.length; i++) {
-      const candle = recent[i];
-      if (swing.type === 'high' && candle.high > swing.price && candle.close < swing.price) {
-        return { detected: true, sweptLevel: swing.price, sweptType: 'high', strength: 75 };
-      }
-      if (swing.type === 'low' && candle.low < swing.price && candle.close > swing.price) {
-        return { detected: true, sweptLevel: swing.price, sweptType: 'low', strength: 75 };
-      }
-    }
-  }
-  return { detected: false, sweptLevel: null, sweptType: null, strength: 0 };
-}
-
-function detectSimpleBreakOfStructure(candles: Candle[]) {
-  if (candles.length < 50) return { detected: false, type: null, breakLevel: null, strength: 0 };
-
-  const swings = findSwingPoints(candles, 3);
-  const recentHighs = swings.filter(s => s.type === 'high').slice(-3);
-  const recentLows = swings.filter(s => s.type === 'low').slice(-3);
-  const lastCandle = candles[candles.length - 1];
-
-  if (recentHighs.length >= 1) {
-    const targetHigh = recentHighs[recentHighs.length - 1];
-    if (lastCandle.close > targetHigh.price) {
-      return { detected: true, type: 'bullish', breakLevel: targetHigh.price, strength: 75 };
-    }
-  }
-
-  if (recentLows.length >= 1) {
-    const targetLow = recentLows[recentLows.length - 1];
-    if (lastCandle.close < targetLow.price) {
-      return { detected: true, type: 'bearish', breakLevel: targetLow.price, strength: 75 };
-    }
-  }
-
-  return { detected: false, type: null, breakLevel: null, strength: 0 };
-}
-
 export function analyzeSMCStrategy(candles: Candle[]): StrategyResult {
   if (candles.length < 50) {
     return {
@@ -72,8 +30,8 @@ export function analyzeSMCStrategy(candles: Candle[]): StrategyResult {
     };
   }
 
-  const liquiditySweep = detectSimpleLiquiditySweep(candles);
-  const breakOfStructure = detectSimpleBreakOfStructure(candles);
+  const liquiditySweep = advancedSMCDetector.detectLiquiditySweep(candles);
+  const breakOfStructure = advancedSMCDetector.detectBreakOfStructure(candles);
 
   const criteriaPassed: Record<string, boolean> = {};
   const criteriaFailed: Record<string, boolean> = {};
@@ -84,7 +42,7 @@ export function analyzeSMCStrategy(candles: Candle[]): StrategyResult {
     criteriaFailed.liquidity_sweep = true;
   }
 
-  if (breakOfStructure.detected && breakOfStructure.strength >= 70) {
+  if (breakOfStructure.detected && breakOfStructure.strength >= 60) {
     criteriaPassed.break_of_structure = true;
   } else {
     criteriaFailed.break_of_structure = true;
@@ -141,7 +99,7 @@ export function analyzeSMCStrategy(candles: Candle[]): StrategyResult {
   }
 
   let signal: 'BUY' | 'SELL' = 'HOLD';
-  if (breakOfStructure.detected && breakOfStructure.type) {
+  if (breakOfStructure.detected && breakOfStructure.type && breakOfStructure.strength >= 60) {
     signal = breakOfStructure.type === 'bullish' ? 'BUY' : 'SELL';
   } else {
     signal = lastCandle.close > candles[candles.length - 2].close ? 'BUY' : 'SELL';
@@ -149,10 +107,10 @@ export function analyzeSMCStrategy(candles: Candle[]): StrategyResult {
 
   let confidence = 50 + (passedCount / totalCriteria) * 30;
 
-  if (liquiditySweep.detected) {
+  if (liquiditySweep.detected && liquiditySweep.strength >= 50) {
     confidence += (liquiditySweep.strength / 100) * 15;
   }
-  if (breakOfStructure.detected) {
+  if (breakOfStructure.detected && breakOfStructure.strength >= 60) {
     confidence += (breakOfStructure.strength / 100) * 15;
   }
 
@@ -163,7 +121,11 @@ export function analyzeSMCStrategy(candles: Candle[]): StrategyResult {
     confidence,
     criteriaPassed,
     criteriaFailed,
-    explanation: `Institutional ${signal.toLowerCase()} setup detected. ${liquiditySweep.detected ? `Liquidity sweep at ${liquiditySweep.sweptLevel?.toFixed(5)}. ` : ''}${breakOfStructure.detected ? `Break of structure ${breakOfStructure.type} at ${breakOfStructure.breakLevel?.toFixed(5)}. ` : ''}High-probability smart money positioning.`,
+    explanation: `Institutional ${signal.toLowerCase()} setup detected. ${
+      liquiditySweep.detected ? liquiditySweep.description + '. ' : ''
+    }${
+      breakOfStructure.detected ? breakOfStructure.description + '. ' : ''
+    }Smart money positioning confirmée avec analyse avancée SMC.`,
     details: {
       direction: signal,
       liquiditySweep: liquiditySweep,
