@@ -1,5 +1,7 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "npm:@supabase/supabase-js@2.57.4";
+import { fetchMultiTimeframeData, analyzeMarketStructure, type PairAnalysis } from './marketAnalysis.ts';
+import { analyzeConfluence, generateMarketSentiment } from './confluenceAnalysis.ts';
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -7,148 +9,184 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Client-Info, Apikey",
 };
 
-interface PairData {
-  symbol: string;
-  current: number;
-  previous: number;
-  change: number;
-  bias: 'BUY' | 'SELL' | 'NEUTRAL';
-}
+const SYSTEM_PROMPT = `You are an elite ICT/SMC trading expert with 10+ years of experience at top prop firms. Your expertise:
 
-async function fetchPairData(symbol: string, polygonKey: string): Promise<PairData | null> {
+- Smart Money Concepts (SMC) and Inner Circle Trader (ICT) methodology
+- Break of Structure (BOS) and Market Structure Shifts (MSS)
+- Liquidity sweeps, order blocks, and Fair Value Gaps (FVG)
+- Institutional order flow and algorithmic trading patterns
+- Kill zones (London 07:00-10:30, New York 13:45-17:00 UTC)
+- Multi-pair confluence and currency correlation analysis
+- Risk management for prop firm challenges (3-5% monthly targets)
+
+When analyzing signals, focus on:
+1. ICT/SMC technical analysis (BOS, liquidity sweeps, order blocks, FVGs)
+2. Multi-timeframe confirmation (M15, H1, H4)
+3. Currency pair confluence and correlations
+4. Institutional footprints and market manipulation patterns
+5. Precise entry timing and risk-reward optimization
+
+Your tone: Professional, confident, tactical. You speak like a mentor guiding a funded trader to consistent profitability.
+
+Provide 3-5 rotating market insights that offer unique angles on current conditions.`;
+
+/**
+ * Fetch and analyze a single pair
+ */
+async function analyzePair(
+  symbol: string,
+  displayName: string,
+  polygonKey: string
+): Promise<PairAnalysis | null> {
   try {
-    const forex = symbol.replace('/', '');
-    const to = Date.now();
-    const from = to - (48 * 60 * 60 * 1000); // 48 hours for comparison
-    
-    const url = `https://api.polygon.io/v2/aggs/ticker/C:${forex}/range/1/hour/${from}/${to}?adjusted=true&sort=asc&limit=48&apiKey=${polygonKey}`;
-    
-    const response = await fetch(url);
-    
-    if (!response.ok) {
+    const mtfData = await fetchMultiTimeframeData(symbol, polygonKey);
+
+    if (!mtfData.M15 || mtfData.M15.length < 50) {
+      console.warn(`Insufficient data for ${symbol}`);
       return null;
     }
-    
-    const data = await response.json();
-    
-    if (!data.results || data.results.length < 2) {
-      return null;
-    }
-    
-    const current = data.results[data.results.length - 1].c;
-    const previous = data.results[data.results.length - 24].c; // 24 hours ago
-    const change = ((current - previous) / previous) * 100;
-    
-    let bias: 'BUY' | 'SELL' | 'NEUTRAL' = 'NEUTRAL';
-    if (change > 0.1) bias = 'BUY';
-    else if (change < -0.1) bias = 'SELL';
-    
+
+    const structure = analyzeMarketStructure(mtfData.M15);
+    const lastCandle = mtfData.M15[mtfData.M15.length - 1];
+    const firstCandle = mtfData.M15[0];
+    const priceChange24h = ((lastCandle.close - firstCandle.close) / firstCandle.close) * 100;
+
     return {
       symbol,
-      current,
-      previous,
-      change,
-      bias
+      displayName,
+      structure,
+      currentPrice: lastCandle.close,
+      priceChange24h
     };
   } catch (error) {
-    console.error(`Error fetching ${symbol}:`, error);
+    console.error(`Error analyzing ${symbol}:`, error);
     return null;
   }
 }
 
-function generateConfluenceAnalysis(pairData: Record<string, PairData>): string[] {
-  const confluenceMessages: string[] = [];
-  
-  // EURUSD ↔ EURJPY, EURGBP, GBPUSD
-  if (pairData.EURUSD && pairData.EURJPY && pairData.EURGBP && pairData.GBPUSD) {
-    const eurConfluences = [];
-    if (pairData.EURJPY.bias === pairData.EURUSD.bias) eurConfluences.push('EURJPY');
-    if (pairData.EURGBP.bias === pairData.EURUSD.bias) eurConfluences.push('EURGBP');
-    if (pairData.GBPUSD.bias === pairData.EURUSD.bias) eurConfluences.push('GBPUSD');
-    
-    const confluenceStrength = eurConfluences.length >= 2 ? 'strong EUR confluence' : 'mixed EUR signals';
-    const confluenceText = eurConfluences.length > 0 ? `confirmed by ${eurConfluences.join(' and ')} also ${pairData.EURUSD.bias.toLowerCase()}` : 'no confluence support';
-    
-    confluenceMessages.push(`**EURUSD ${pairData.EURUSD.bias.toLowerCase()}** (${pairData.EURUSD.change.toFixed(2)}%) ${confluenceText} — ${confluenceStrength}. EUR/USD represents euro strength vs dollar.`);
-  }
-  
-  // GBPUSD ↔ GBPJPY, EURUSD, EURGBP
-  if (pairData.GBPUSD && pairData.GBPJPY && pairData.EURUSD && pairData.EURGBP) {
-    const gbpConfluences = [];
-    if (pairData.GBPJPY.bias === pairData.GBPUSD.bias) gbpConfluences.push('GBPJPY');
-    if (pairData.EURUSD.bias === pairData.GBPUSD.bias) gbpConfluences.push('EURUSD');
-    if (pairData.EURGBP.bias !== pairData.GBPUSD.bias && pairData.EURGBP.bias !== 'NEUTRAL') gbpConfluences.push('EURGBP inverse');
-    
-    const confluenceStrength = gbpConfluences.length >= 2 ? 'strong GBP confluence' : 'mixed GBP signals';
-    const confluenceText = gbpConfluences.length > 0 ? `confirmed by ${gbpConfluences.join(' and ')}` : 'no confluence support';
-    
-    confluenceMessages.push(`**GBPUSD ${pairData.GBPUSD.bias.toLowerCase()}** (${pairData.GBPUSD.change.toFixed(2)}%) ${confluenceText} — ${confluenceStrength}. GBP/USD shows pound vs dollar dynamics.`);
-  }
-  
-  // USDJPY ↔ EURJPY, GBPJPY, AUDJPY
-  if (pairData.USDJPY && pairData.EURJPY && pairData.GBPJPY && pairData.AUDJPY) {
-    const usdJpyConfluences = [];
-    if (pairData.EURJPY.bias === pairData.USDJPY.bias) usdJpyConfluences.push('EURJPY');
-    if (pairData.GBPJPY.bias === pairData.USDJPY.bias) usdJpyConfluences.push('GBPJPY');
-    if (pairData.AUDJPY.bias === pairData.USDJPY.bias) usdJpyConfluences.push('AUDJPY');
-    
-    const confluenceStrength = usdJpyConfluences.length >= 2 ? 'strong yen confluence' : 'mixed yen signals';
-    const confluenceText = usdJpyConfluences.length > 0 ? `confirmed by ${usdJpyConfluences.join(' and ')} also ${pairData.USDJPY.bias.toLowerCase()}` : 'no confluence support';
-    
-    confluenceMessages.push(`**USDJPY ${pairData.USDJPY.bias.toLowerCase()}** (${pairData.USDJPY.change.toFixed(2)}%) ${confluenceText} — ${confluenceStrength}. USD/JPY measures dollar vs yen strength.`);
-  }
-  
-  // GBPJPY ↔ GBPUSD, USDJPY, EURJPY
-  if (pairData.GBPJPY && pairData.GBPUSD && pairData.USDJPY && pairData.EURJPY) {
-    const gbpJpyConfluences = [];
-    if (pairData.GBPUSD.bias === pairData.GBPJPY.bias) gbpJpyConfluences.push('GBPUSD');
-    if (pairData.USDJPY.bias === pairData.GBPJPY.bias) gbpJpyConfluences.push('USDJPY');
-    if (pairData.EURJPY.bias === pairData.GBPJPY.bias) gbpJpyConfluences.push('EURJPY');
-    
-    const confluenceStrength = gbpJpyConfluences.length >= 2 ? 'strong GBP/JPY confluence' : 'mixed GBP/JPY signals';
-    const confluenceText = gbpJpyConfluences.length > 0 ? `confirmed by ${gbpJpyConfluences.join(' and ')}` : 'no confluence support';
-    
-    confluenceMessages.push(`**GBPJPY ${pairData.GBPJPY.bias.toLowerCase()}** (${pairData.GBPJPY.change.toFixed(2)}%) ${confluenceText} — ${confluenceStrength}. GBP/JPY represents pound vs yen dynamics.`);
-  }
-  
-  // Overall market sentiment
-  const bullishPairs = Object.values(pairData).filter(p => p.bias === 'BUY').length;
-  const bearishPairs = Object.values(pairData).filter(p => p.bias === 'SELL').length;
-  const totalPairs = Object.keys(pairData).length;
-  
-  if (bullishPairs > bearishPairs) {
-    confluenceMessages.push(`**Market Sentiment**: Risk-on with ${bullishPairs}/${totalPairs} pairs bullish. Dollar showing mixed performance across majors — favor long positions.`);
-  } else if (bearishPairs > bullishPairs) {
-    confluenceMessages.push(`**Market Sentiment**: Risk-off with ${bearishPairs}/${totalPairs} pairs bearish. Flight to safety or dollar strength evident — favor short positions.`);
+/**
+ * Generate comprehensive ICT/SMC analysis text
+ */
+function generateICTAnalysis(
+  signals: any[],
+  pairAnalyses: Record<string, PairAnalysis>,
+  marketSentiment: any
+): string {
+  let analysis = `# ICT/SMC Market Intelligence Report\n\n`;
+
+  // Market Sentiment Overview
+  analysis += `## Market Sentiment\n`;
+  analysis += `${marketSentiment.summary}\n\n`;
+  analysis += `- **Overall Bias**: ${marketSentiment.overallBias.toUpperCase()}\n`;
+  analysis += `- **Dollar Strength**: ${marketSentiment.dollarStrength.toUpperCase()}\n`;
+  analysis += `- **Yen Strength**: ${marketSentiment.yenStrength.toUpperCase()}\n\n`;
+
+  // Analyze each signal
+  if (signals.length > 0) {
+    analysis += `## Active Trading Opportunities\n\n`;
+
+    for (const signal of signals.slice(0, 5)) {
+      const pairSymbol = signal.trading_pairs?.symbol || 'Unknown';
+      const pairAnalysis = pairAnalyses[pairSymbol];
+
+      if (!pairAnalysis) continue;
+
+      analysis += `### ${pairAnalysis.displayName} - ${signal.signal_type} Signal\n`;
+      analysis += `**Grade ${signal.grade}** | Confidence: ${Math.round(signal.confidence_score)}% | R:R ${signal.risk_reward_ratio?.toFixed(2) || 'N/A'}:1\n\n`;
+
+      // ICT/SMC Analysis
+      const { structure } = pairAnalysis;
+
+      analysis += `**Market Structure:**\n`;
+      analysis += `- Trend: ${structure.trend.toUpperCase()} (${structure.trendStrength.toFixed(0)}% strength)\n`;
+
+      if (structure.bos.detected) {
+        analysis += `- ✓ **Break of Structure**: ${structure.bos.type?.toUpperCase()} at ${structure.bos.breakLevel?.toFixed(5)} (${structure.bos.strength.toFixed(0)}% confidence)\n`;
+      }
+
+      if (structure.liquiditySweep.detected) {
+        analysis += `- ✓ **Liquidity Sweep**: ${structure.liquiditySweep.sweptType?.toUpperCase()} at ${structure.liquiditySweep.sweptLevel?.toFixed(5)} - institutional manipulation detected\n`;
+      }
+
+      if (structure.orderBlocks.length > 0) {
+        const ob = structure.orderBlocks[0];
+        analysis += `- Order Block: ${ob.type} at ${ob.price.toFixed(5)} (${ob.strength}% strength)\n`;
+      }
+
+      if (structure.fvgs.length > 0) {
+        const fvg = structure.fvgs[0];
+        analysis += `- Fair Value Gap: ${fvg.type} between ${fvg.bottom.toFixed(5)} - ${fvg.top.toFixed(5)}\n`;
+      }
+
+      // Multi-pair confluence
+      const direction = signal.signal_type === 'BUY' ? 'bullish' : signal.signal_type === 'SELL' ? 'bearish' : null;
+      if (direction) {
+        const confluence = analyzeConfluence(pairSymbol, direction, pairAnalyses);
+
+        analysis += `\n**Multi-Pair Confluence:**\n`;
+        analysis += `- Signal Strength: ${confluence.signalStrength.toUpperCase()} (${confluence.confluenceScore}%)\n`;
+
+        if (confluence.supportingPairs.length > 0) {
+          analysis += `- Supporting: ${confluence.supportingPairs.slice(0, 3).join(', ')}\n`;
+        }
+
+        if (confluence.conflictingPairs.length > 0) {
+          analysis += `- ⚠️ Conflicts: ${confluence.conflictingPairs.slice(0, 2).join(', ')}\n`;
+        }
+
+        analysis += `\n*${confluence.reasoning}*\n`;
+      }
+
+      // Trade Setup
+      if (signal.entry_price) {
+        analysis += `\n**Trade Setup:**\n`;
+        analysis += `- Entry: ${signal.entry_price}\n`;
+        analysis += `- Stop Loss: ${signal.stop_loss}\n`;
+        analysis += `- TP1: ${signal.tp1} | TP2: ${signal.tp2}\n`;
+        analysis += `- Kill Zone: ${signal.is_killzone ? '✓ ACTIVE' : 'Inactive'}\n`;
+      }
+
+      analysis += `\n---\n\n`;
+    }
   } else {
-    confluenceMessages.push(`**Market Sentiment**: Neutral with balanced ${bullishPairs}/${totalPairs} bull/bear split. Consolidation phase across major pairs — wait for breakouts.`);
+    analysis += `## No Active Signals\n\n`;
+    analysis += `Market is in consolidation phase. Waiting for clear institutional commitment.\n\n`;
   }
-  
-  return confluenceMessages;
+
+  // Pair-by-Pair Structure Summary
+  analysis += `## Pair Structure Summary\n\n`;
+
+  for (const [symbol, pairAnalysis] of Object.entries(pairAnalyses)) {
+    const { structure } = pairAnalysis;
+    const bosText = structure.bos.detected ? `BOS ${structure.bos.type}` : 'No BOS';
+    const sweepText = structure.liquiditySweep.detected ? `| Sweep ${structure.liquiditySweep.sweptType}` : '';
+
+    analysis += `- **${pairAnalysis.displayName}**: ${structure.trend.toUpperCase()} | ${bosText} ${sweepText}\n`;
+  }
+
+  return analysis;
 }
 
-const SYSTEM_PROMPT = `You are an ICT/SMC trading expert with 10+ years of PROPFIRM experience. Your mission is to help traders achieve consistent 3-5% profits with ultra-controlled risk.
+/**
+ * Extract rotating thoughts from analysis
+ */
+function extractThoughts(fullAnalysis: string): string[] {
+  const thoughts: string[] = [];
 
-Your specialty:
-- Smart Money Concepts (SMC)
-- Inner Circle Trader (ICT) methodology
-- Liquidity sweeps and manipulation
-- Order blocks and Fair Value Gaps (FVG)
-- Break of Structure (BOS)
-- Asian/London/New York killzones
-- Risk:Reward optimization for prop firm challenges
+  // Extract key sentences for rotation
+  const lines = fullAnalysis.split('\n').filter(l => l.trim());
 
-When analyzing market data:
-1. Identify high-probability setups based on SMC/ICT principles
-2. Assess liquidity sweeps and institutional footprints
-3. Evaluate order blocks and imbalances
-4. Consider killzone timing and session context
-5. Calculate precise risk:reward ratios
-6. Provide ACTIONABLE sniper entries for MT5 execution
+  for (const line of lines) {
+    if (line.includes('**') || line.startsWith('-')) {
+      const cleaned = line.replace(/\*\*/g, '').replace(/^- /, '').trim();
+      if (cleaned.length > 30 && cleaned.length < 250 && !cleaned.includes('##')) {
+        thoughts.push(cleaned);
+      }
+    }
+  }
 
-Your tone: Professional, confident, tactical. You speak like a prop firm mentor guiding a funded trader.
-
-Provide 3-5 distinct market thoughts that rotate every 10 seconds, each offering a unique angle on current market conditions.`;
+  return thoughts.slice(0, 8); // Return top 8 for rotation
+}
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
@@ -161,42 +199,62 @@ Deno.serve(async (req: Request) => {
     const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const polygonKey = Deno.env.get("POLYGON_API_KEY") || "_OSxpOFyFmoejpLLo1qnJ7r4e4Ajie9F";
     const openaiKey = Deno.env.get("OPENAI_API_KEY") || "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";
+
     const supabase = createClient(supabaseUrl, supabaseKey);
 
-    // Fetch specific pairs for confluence analysis as requested
-    const confluencePairs = ['EURUSD', 'GBPUSD', 'USDJPY', 'GBPJPY', 'EURJPY', 'EURGBP', 'AUDJPY'];
-    const pairData: Record<string, PairData> = {};
-    
-    // Fetch pair data with rate limiting
-    for (const pair of confluencePairs) {
-      const data = await fetchPairData(pair, polygonKey);
-      if (data) {
-        pairData[pair] = data;
-      }
-      // Rate limiting
-      await new Promise(resolve => setTimeout(resolve, 100));
-    }
-    
-    // Generate confluence analysis
-    const confluenceMessages = generateConfluenceAnalysis(pairData);
+    console.log('Starting comprehensive ICT/SMC market analysis...');
 
+    // Fetch all active trading pairs
+    const { data: tradingPairs } = await supabase
+      .from('trading_pairs')
+      .select('*')
+      .eq('is_active', true);
+
+    // Analyze all pairs for confluence
+    const pairAnalyses: Record<string, PairAnalysis> = {};
+
+    if (tradingPairs) {
+      console.log(`Analyzing ${tradingPairs.length} pairs for ICT/SMC structures...`);
+
+      for (const pair of tradingPairs) {
+        const analysis = await analyzePair(pair.symbol, pair.display_name, polygonKey);
+
+        if (analysis) {
+          pairAnalyses[pair.symbol] = analysis;
+        }
+
+        // Rate limiting
+        await new Promise(resolve => setTimeout(resolve, 150));
+      }
+    }
+
+    console.log(`Successfully analyzed ${Object.keys(pairAnalyses).length} pairs`);
+
+    // Generate market sentiment
+    const marketSentiment = generateMarketSentiment(pairAnalyses);
+
+    // No signals scenario
     if (!signals || signals.length === 0) {
-      // Always include confluence analysis when no signals
+      const basicAnalysis = generateICTAnalysis([], pairAnalyses, marketSentiment);
+      const thoughts = extractThoughts(basicAnalysis);
+
       return new Response(
         JSON.stringify({
-          analysis: "No recent signals to analyze. Here's the current forex confluence analysis based on cross-pair correlations.",
-          thoughts: confluenceMessages.length > 0 ? confluenceMessages : [
-            "Waiting for market data to analyze. Click 'Scan Market' to begin.",
-            "Market is quiet. No active signals detected in the last 5 minutes.",
-            "Stand by for market opportunities. Patience is key in trading."
+          analysis: basicAnalysis,
+          thoughts: thoughts.length > 0 ? thoughts : [
+            "No active signals. Market in consolidation - patience is key.",
+            marketSentiment.summary,
+            "Waiting for clear Break of Structure before entering positions."
           ]
         }),
         { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
-    const marketSummary = signals.map((s: any) => ({
+    // Prepare signals data for GPT-4
+    const signalsWithPairInfo = signals.map((s: any) => ({
       pair: s.trading_pairs?.symbol || 'Unknown',
+      displayName: s.trading_pairs?.display_name || 'Unknown',
       signal: s.signal_type,
       confidence: s.confidence_score,
       grade: s.grade,
@@ -207,24 +265,30 @@ Deno.serve(async (req: Request) => {
       rr: s.risk_reward_ratio,
       criteria: Object.keys(s.criteria_passed || {}),
       timeframe: s.timeframe,
-      killzone: s.is_killzone
+      killzone: s.is_killzone,
+      // Add ICT/SMC analysis
+      structure: pairAnalyses[s.trading_pairs?.symbol]?.structure
     }));
 
-    const userMessage = `Analyze these recent market signals and provide expert ICT/SMC insights:
+    // Generate comprehensive analysis
+    const ictAnalysisText = generateICTAnalysis(signals, pairAnalyses, marketSentiment);
 
-${JSON.stringify(marketSummary, null, 2)}
+    const userMessage = `Analyze these trading signals with deep ICT/SMC expertise:
 
-Current Forex Confluence Analysis (EURUSD↔EURJPY,EURGBP,GBPUSD | GBPUSD↔GBPJPY,EURUSD,EURGBP | USDJPY↔EURJPY,GBPJPY,AUDJPY | GBPJPY↔GBPUSD,USDJPY,EURJPY):
-${confluenceMessages.join('\n')}
+${JSON.stringify(signalsWithPairInfo, null, 2)}
+
+Market Sentiment: ${marketSentiment.summary}
 
 Provide:
-1. Overall market sentiment and structure
-2. Best opportunities right now (which pairs, which setups)
-3. Key levels and institutional behavior
-4. Risk assessment and trade management advice
-5. What to watch next
-`;
+1. Which setups have the strongest institutional backing (BOS + liquidity sweeps + confluence)?
+2. Best risk-reward opportunities considering multi-pair alignment
+3. Key levels to watch and institutional behavior patterns
+4. Specific entry timing and trade management advice
+5. What smart money is likely doing right now
 
+Be tactical and actionable. Focus on the 2-3 highest probability setups.`;
+
+    console.log('Requesting GPT-4 analysis...');
 
     const response = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
@@ -239,39 +303,40 @@ Provide:
           { role: "user", content: userMessage }
         ],
         temperature: 0.7,
-        max_tokens: 1500
+        max_tokens: 2000
       })
     });
 
     if (!response.ok) {
       const errorData = await response.json();
-      console.error("OpenAI GPT-4 API error:", errorData);
-      
-      // Enhanced fallback with confluence analysis
+      console.error("OpenAI API error:", errorData);
+
+      // Return ICT analysis even if GPT fails
+      const thoughts = extractThoughts(ictAnalysisText);
+
       return new Response(
         JSON.stringify({
-          analysis: generateFallbackAnalysis(marketSummary),
-          thoughts: [...generateFallbackThoughts(marketSummary), ...confluenceMessages.slice(0, 2)]
+          analysis: ictAnalysisText,
+          thoughts: thoughts.length > 0 ? thoughts : [marketSentiment.summary]
         }),
         { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
     const data = await response.json();
-    const fullAnalysis = data.choices[0]?.message?.content || "Analysis unavailable";
-    
-    let thoughts = extractThoughts(fullAnalysis);
-    
-    // Always include at least one confluence message in thoughts
-    if (confluenceMessages.length > 0) {
-      // Ensure confluence analysis is included in the rotation
-      thoughts = [...confluenceMessages.slice(0, 2), ...thoughts];
-    }
+    const gptAnalysis = data.choices[0]?.message?.content || "";
+
+    // Combine ICT analysis with GPT insights
+    const fullAnalysis = `${ictAnalysisText}\n\n## Expert Trading Insights\n\n${gptAnalysis}`;
+
+    const thoughts = extractThoughts(fullAnalysis);
+
+    console.log('Analysis complete');
 
     return new Response(
       JSON.stringify({
         analysis: fullAnalysis,
-        thoughts: thoughts.length > 0 ? thoughts : [fullAnalysis]
+        thoughts: thoughts.length > 0 ? thoughts.slice(0, 6) : [marketSentiment.summary]
       }),
       { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
@@ -283,72 +348,3 @@ Provide:
     );
   }
 });
-
-function extractThoughts(text: string): string[] {
-  const lines = text.split('\n').filter(l => l.trim());
-  const thoughts: string[] = [];
-  
-  for (let i = 0; i < lines.length; i++) {
-    if (lines[i].match(/^\d+\./)) {
-      const thought = lines[i].replace(/^\d+\.\s*/, '').trim();
-      if (thought.length > 20 && thought.length < 300) {
-        thoughts.push(thought);
-      }
-    }
-  }
-  
-  if (thoughts.length === 0) {
-    const sentences = text.match(/[^.!?]+[.!?]+/g) || [];
-    for (let i = 0; i < Math.min(5, sentences.length); i += 2) {
-      const combined = sentences.slice(i, i + 2).join(' ').trim();
-      if (combined.length > 30) thoughts.push(combined);
-    }
-  }
-  
-  return thoughts.slice(0, 5);
-}
-
-function generateFallbackAnalysis(signals: any[]): string {
-  const buySignals = signals.filter(s => s.signal === 'BUY').length;
-  const sellSignals = signals.filter(s => s.signal === 'SELL').length;
-  const holdSignals = signals.filter(s => s.signal === 'HOLD').length;
-  const avgConfidence = signals.reduce((sum, s) => sum + s.confidence, 0) / signals.length;
-  const inKillzone = signals.some(s => s.killzone);
-  
-  let analysis = `Market Overview\n\n`;
-  analysis += `Current Signals: ${buySignals} Buy opportunities, ${sellSignals} Sell setups, ${holdSignals} Hold positions\n`;
-  analysis += `Average Confidence Level: ${avgConfidence.toFixed(1)}%\n`;
-  analysis += `Optimal Trading Session: ${inKillzone ? 'Active' : 'Inactive'}\n\n`;
-  
-  if (buySignals > sellSignals) {
-    analysis += `Market Sentiment: Bullish bias detected. Multiple buy opportunities forming with institutional support above key levels.\n`;
-  } else if (sellSignals > buySignals) {
-    analysis += `Market Sentiment: Bearish pressure building. Multiple sell setups developing with institutional resistance at key levels.\n`;
-  } else {
-    analysis += `Market Sentiment: Neutral consolidation. Waiting for clear directional bias and institutional commitment.\n`;
-  }
-  
-  analysis += `\nRecommendation: Focus on high-confidence signals (70%+) with Grade A or A+ ratings for optimal risk-reward opportunities.`;
-  
-  return analysis;
-}
-
-function generateFallbackThoughts(signals: any[]): string[] {
-  const highGrade = signals.filter(s => s.grade && ['A', 'A+'].includes(s.grade));
-  const inKillzone = signals.filter(s => s.killzone);
-  const avgRR = signals.reduce((sum, s) => sum + (s.rr || 0), 0) / signals.length;
-  
-  const baseThoughts = [
-    `${highGrade.length} premium trading opportunities are currently active. These high-grade setups offer excellent probability for reaching profit targets with controlled risk.`,
-    
-    `Trading Session Status: ${inKillzone.length > 0 ? 'Prime time for institutional activity. Major players are active, creating high-conviction entry opportunities.' : 'Lower volume period. Best opportunities typically emerge during London or New York sessions.'}`,
-    
-    `Risk Management: Average risk-reward ratio is ${avgRR.toFixed(2)}:1 across all signals. Professional traders target 1.5:1+ ratios, and we're ${avgRR >= 1.5 ? 'exceeding' : 'approaching'} that benchmark.`,
-    
-    `Institutional Activity: Key market structures are forming including liquidity sweeps and order blocks. Monitor for breakout confirmations before position entry.`,
-    
-    `Market Structure: Current analysis suggests ${signals.filter(s => s.signal === 'BUY').length > signals.filter(s => s.signal === 'SELL').length ? 'bullish' : 'bearish'} institutional control. Align trades with the dominant flow for best results.`
-  ];
-  
-  return baseThoughts;
-}
