@@ -34,7 +34,7 @@ function mergeResults(results: StrategyResult[]): StrategyResult {
       confidence: avgConfidence,
       criteriaPassed: allCriteriaPassed,
       criteriaFailed: allCriteriaFailed,
-      explanation: 'The market is speaking in whispers right now. Multiple timeframes and strategies are giving mixed signals - this tells me to step aside and wait for clarity. The best trades come to those who wait.',
+      explanation: `All strategies recommend HOLD. ${results.map(r => r.explanation).join(' ')}`,
       details: {}
     };
   }
@@ -56,7 +56,7 @@ function mergeResults(results: StrategyResult[]): StrategyResult {
     confidence: avgConfidence,
     criteriaPassed: allCriteriaPassed,
     criteriaFailed: allCriteriaFailed,
-    explanation: `This is what we live for - multiple strategies singing in harmony for a ${dominantSignal.toLowerCase()} setup. When ${matchingResults.length} different approaches agree, the market is telling us something important. Time to listen.`,
+    explanation: `${dominantSignal} signal confirmed by ${matchingResults.length} strategies: ${matchingResults.map(r => r.explanation).join(' ')}`,
     details: { strategies, agreement: matchingResults.length }
   };
 }

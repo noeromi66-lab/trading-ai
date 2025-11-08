@@ -19,13 +19,12 @@ Deno.serve(async (req: Request) => {
 
     const { data: users } = await supabase
       .from("user_settings")
-      .select("user_id, preferred_pairs, auto_scan_enabled, notify_in_app, secret_strategy_activated")
-      .eq("auto_scan_enabled", true)
-      .eq("notify_in_app", true);
+      .select("user_id, preferred_pairs, auto_scan_enabled")
+      .eq("auto_scan_enabled", true);
 
     if (!users || users.length === 0) {
       return new Response(
-        JSON.stringify({ message: "No users with auto-scan and in-app notifications enabled", scanned: 0 }),
+        JSON.stringify({ message: "No users with auto-scan enabled", scanned: 0 }),
         { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -51,12 +50,8 @@ Deno.serve(async (req: Request) => {
           user_id: userSettings.user_id,
           activity_type: "SCAN_STARTED",
           pair_symbol: pair.symbol,
-          message: `Auto-scan initiated for ${pair.symbol}${userSettings.secret_strategy_activated ? ' (SECRET Strategy ACTIVE)' : ''}`,
-          metadata: { 
-            autoScan: true, 
-            cronJob: true,
-            secretStrategyActive: userSettings.secret_strategy_activated || false
-          }
+          message: `Auto-scan initiated for ${pair.symbol}`,
+          metadata: { autoScan: true, cronJob: true }
         });
 
         try {
@@ -67,11 +62,7 @@ Deno.serve(async (req: Request) => {
               "Authorization": `Bearer ${supabaseKey}`,
               "Content-Type": "application/json",
             },
-            body: JSON.stringify({ 
-              pairSymbol: pair.symbol, 
-              userId: userSettings.user_id,
-              secretStrategyActive: userSettings.secret_strategy_activated || false
-            })
+            body: JSON.stringify({ pairSymbol: pair.symbol, userId: userSettings.user_id })
           });
 
           if (response.ok) {
@@ -84,12 +75,7 @@ Deno.serve(async (req: Request) => {
     }
 
     return new Response(
-      JSON.stringify({ 
-        message: "Auto-scan completed", 
-        scanned: totalScans, 
-        users: users.length,
-        secretStrategyUsers: users.filter(u => u.secret_strategy_activated).length
-      }),
+      JSON.stringify({ message: "Auto-scan completed", scanned: totalScans, users: users.length }),
       { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   } catch (error) {

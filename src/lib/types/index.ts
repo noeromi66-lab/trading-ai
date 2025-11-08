@@ -73,46 +73,10 @@ export interface UserSettings {
   notifySms: boolean;
   autoScanEnabled: boolean;
   scanIntervalMinutes: number;
-  smsNotificationsEnabled: boolean;
-  secretStrategyUnlocked: boolean;
 }
 
 export interface SwingPoint {
   index: number;
   price: number;
   type: 'high' | 'low';
-}
-
-export interface Signal {
-  id: string;
-  user_id: string;
-  symbol: string;
-  timeframe: string;
-  direction: 'long' | 'short';
-  entry: number;
-  stop_loss: number;
-  take_profit: number;
-  confidence: number;
-  strategy: string;
-  status: 'active' | 'expired' | 'taken';
-  created_at: string;
-  metadata?: Record<string, any>;
-}
-
-export interface KillzoneChecklist {
-  liquiditySwept: boolean;
-  breakOfStructure: boolean;
-  fvgOrOB: boolean;
-  inKillzone: boolean;
-  rrMinimum: boolean;
-  noMajorNews: boolean;
-}
-
-export interface AsianChecklist {
-  asianRangeDefined: boolean;
-  validRangeSize: boolean;
-  breakoutDetected: boolean;
-  fakeoutConfirmed: boolean;
-  structureShift: boolean;
-  confluenceMet: number;
 }

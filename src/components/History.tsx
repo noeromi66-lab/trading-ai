@@ -1,19 +1,14 @@
 import { useState, useEffect } from 'react';
-import { Clock, Activity, TrendingUp, XCircle, PlayCircle, Pin, X, ChevronDown, ChevronUp } from 'lucide-react';
+import { Clock, Activity, TrendingUp, XCircle, PlayCircle } from 'lucide-react';
 import { supabase } from '../lib/supabase';
-import { useAuth } from '../lib/auth/AuthContext';
 
 export default function History() {
-  const { user } = useAuth();
   const [logs, setLogs] = useState<any[]>([]);
-  const [notifications, setNotifications] = useState<any[]>([]);
-  const [notificationsExpanded, setNotificationsExpanded] = useState(false);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     loadLogs();
-    loadNotifications();
-  }, [user]);
+  }, []);
 
   async function loadLogs() {
     setLoading(true);
@@ -25,32 +20,6 @@ export default function History() {
 
     setLogs(data || []);
     setLoading(false);
-  }
-
-  async function loadNotifications() {
-    if (!user) return;
-
-    const { data } = await supabase
-      .from('in_app_notifications')
-      .select('*')
-      .eq('user_id', user.id)
-      .eq('dismissed', false)
-      .order('created_at', { ascending: false })
-      .limit(5);
-
-    setNotifications(data || []);
-  }
-
-  async function dismissNotification(notificationId: string) {
-    if (!user) return;
-
-    await supabase
-      .from('in_app_notifications')
-      .update({ dismissed: true, dismissed_at: new Date().toISOString() })
-      .eq('id', notificationId)
-      .eq('user_id', user.id);
-
-    setNotifications(prev => prev.filter(n => n.id !== notificationId));
   }
 
   const getActivityIcon = (type: string) => {
@@ -101,75 +70,6 @@ export default function History() {
             <p className="text-slate-400">Complete audit trail of all system activities</p>
           </div>
         </div>
-
-        {notifications.length > 0 && (
-          <div className="mb-8">
-            <div className="bg-gradient-to-r from-amber-900/30 via-amber-800/20 to-amber-900/30 rounded-2xl border-2 border-amber-500/40 p-6 backdrop-blur-sm shadow-2xl shadow-amber-500/10">
-              <div className="flex items-center gap-3 mb-5">
-                <div className="relative">
-                  <Pin className="w-7 h-7 text-amber-400 drop-shadow-glow" />
-                  <div className="absolute -top-1 -right-1 w-3 h-3 bg-amber-400 rounded-full animate-pulse"></div>
-                </div>
-                <div>
-                  <h2 className="text-2xl font-bold text-amber-300 drop-shadow-glow">Pinned In-App Notifications</h2>
-                  <p className="text-amber-400/70 text-sm">Setup checklists and important trading alerts (max 5)</p>
-                </div>
-                <button
-                  onClick={() => setNotificationsExpanded(!notificationsExpanded)}
-                  className="flex items-center gap-2 px-4 py-2 bg-amber-500/20 hover:bg-amber-500/30 rounded-lg transition-all border border-amber-500/30"
-                >
-                  <span className="text-amber-300 font-medium text-sm">
-                    {notificationsExpanded ? 'Collapse' : `Expand (${notifications.length})`}
-                  </span>
-                  {notificationsExpanded ? 
-                    <ChevronUp className="w-4 h-4 text-amber-300" /> : 
-                    <ChevronDown className="w-4 h-4 text-amber-300" />
-                  }
-                </button>
-              </div>
-
-              <div className="space-y-4">
-                {notifications.slice(0, notificationsExpanded ? 5 : 1).map((notification, index) => (
-                  <div
-                    key={notification.id}
-                    className="group bg-slate-900/60 backdrop-blur-sm border border-slate-700/50 rounded-xl p-5 hover:border-amber-500/40 transition-all duration-300 hover:shadow-lg hover:shadow-amber-500/10"
-                  >
-                    <div className="flex items-start gap-4">
-                      <div className="flex-shrink-0 w-8 h-8 bg-gradient-to-br from-amber-500 to-amber-600 rounded-lg flex items-center justify-center font-bold text-slate-900 shadow-lg shadow-amber-500/30">
-                        {index + 1}
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <h3 className="text-lg font-bold text-amber-300 mb-2 flex items-center gap-2">
-                          {notification.title}
-                        </h3>
-                        <p className="text-slate-300 whitespace-pre-line leading-relaxed text-sm">
-                          {notification.message}
-                        </p>
-                      </div>
-                      <button
-                        onClick={() => dismissNotification(notification.id)}
-                        className="flex-shrink-0 p-2.5 hover:bg-red-500/10 rounded-lg transition-all duration-200 group/btn border border-transparent hover:border-red-500/30"
-                        title="Dismiss notification"
-                      >
-                        <X className="w-5 h-5 text-slate-400 group-hover/btn:text-red-400 transition-colors" />
-                      </button>
-                    </div>
-                  </div>
-                ))}
-                {!notificationsExpanded && notifications.length > 1 && (
-                  <div className="text-center">
-                    <button
-                      onClick={() => setNotificationsExpanded(true)}
-                      className="text-amber-400/70 hover:text-amber-400 text-sm transition-colors"
-                    >
-                      +{notifications.length - 1} more notifications
-                    </button>
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-        )}
 
         {loading ? (
           <div className="flex items-center justify-center py-20">

@@ -96,7 +96,7 @@ export function analyzeAsianKillzoneStrategy(candles: Candle[]): StrategyResult 
       confidence: (passedCount / totalCriteria) * 100,
       criteriaPassed,
       criteriaFailed,
-      explanation: 'The big players aren\'t at their desks yet. I prefer to trade when the institutions are active - London and New York sessions are where the real money moves. Let\'s wait for the right time.',
+      explanation: `Outside killzone hours. Current session: ${killzone.session}. Wait for London (07:00-10:00 UTC) or NY (12:00-15:00 UTC) session.`,
       details: { session: killzone.session, asianRange }
     };
   }
@@ -107,7 +107,7 @@ export function analyzeAsianKillzoneStrategy(candles: Candle[]): StrategyResult 
       confidence: (passedCount / totalCriteria) * 100,
       criteriaPassed,
       criteriaFailed,
-      explanation: 'The range is being respected, but I need to see a decisive break with conviction. The setup is forming nicely - just waiting for that institutional push to confirm direction.',
+      explanation: `Asian/Killzone setup incomplete: ${passedCount}/${totalCriteria} criteria. Missing: ${Object.keys(criteriaFailed).join(', ')}.`,
       details: { session: killzone.session, asianRange }
     };
   }
@@ -125,7 +125,7 @@ export function analyzeAsianKillzoneStrategy(candles: Candle[]): StrategyResult 
       confidence: (passedCount / totalCriteria) * 100,
       criteriaPassed,
       criteriaFailed,
-      explanation: 'In optimal trading session but breakout direction needs confirmation',
+      explanation: 'In killzone but no clear breakout direction confirmed',
       details: { session: killzone.session, asianRange }
     };
   }
@@ -137,7 +137,7 @@ export function analyzeAsianKillzoneStrategy(candles: Candle[]): StrategyResult 
     confidence,
     criteriaPassed,
     criteriaFailed,
-    explanation: `Perfect timing during the ${killzone.session} session. The breakout is clean and decisive - this is institutional money at work. The ${signal.toLowerCase()} momentum is undeniable here.`,
+    explanation: `Asian/Killzone ${signal} during ${killzone.session} session: ${Object.keys(criteriaPassed).join(', ')}.`,
     details: { session: killzone.session, asianRange, direction: signal }
   };
 }

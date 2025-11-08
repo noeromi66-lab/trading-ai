@@ -1,5 +1,4 @@
 import type { Candle, StrategyResult, SwingPoint } from '../types';
-import { advancedSMCDetector } from '../modules/advancedSMCDetector';
 
 export function findSwingPoints(candles: Candle[], lookback: number = 5): SwingPoint[] {
   const swings: SwingPoint[] = [];
@@ -19,37 +18,33 @@ export function findSwingPoints(candles: Candle[], lookback: number = 5): SwingP
 }
 
 export function analyzeSMCStrategy(candles: Candle[]): StrategyResult {
-  if (candles.length < 50) {
+  if (candles.length < 30) {
     return {
       signal: 'HOLD',
       confidence: 0,
       criteriaPassed: {},
       criteriaFailed: { insufficient_data: true },
-      explanation: 'Insufficient candle data for SMC analysis (need 50+ candles)',
+      explanation: 'Insufficient candle data for SMC analysis',
       details: {}
     };
   }
 
-  const liquiditySweep = advancedSMCDetector.detectLiquiditySweep(candles);
-  const breakOfStructure = advancedSMCDetector.detectBreakOfStructure(candles);
+  const swings = findSwingPoints(candles);
+  const recent = candles.slice(-20);
+  const lastCandle = candles[candles.length - 1];
 
   const criteriaPassed: Record<string, boolean> = {};
   const criteriaFailed: Record<string, boolean> = {};
 
-  if (liquiditySweep.detected && liquiditySweep.strength >= 70) {
-    criteriaPassed.liquidity_sweep = true;
-  } else {
-    criteriaFailed.liquidity_sweep = true;
-  }
+  const highestHigh = Math.max(...recent.map(c => c.high));
+  const lowestLow = Math.min(...recent.map(c => c.low));
 
-  if (breakOfStructure.detected && breakOfStructure.strength >= 60) {
-    criteriaPassed.break_of_structure = true;
-  } else {
-    criteriaFailed.break_of_structure = true;
-  }
-
-  const recent = candles.slice(-20);
-  const lastCandle = candles[candles.length - 1];
+  const sweepDetected = recent.some(c =>
+    (c.high > highestHigh && c.close < highestHigh) ||
+    (c.low < lowestLow && c.close > lowestLow)
+  );
+  if (sweepDetected) criteriaPassed.liquidity_sweep = true;
+  else criteriaFailed.liquidity_sweep = true;
 
   const avgVolume = recent.reduce((sum, c) => sum + c.volume, 0) / recent.length;
   const orderBlockDetected = recent.slice(-10).some((c, i, arr) => {
@@ -79,6 +74,10 @@ export function analyzeSMCStrategy(candles: Candle[]): StrategyResult {
   if (fvgDetected) criteriaPassed.fair_value_gap = true;
   else criteriaFailed.fair_value_gap = true;
 
+  const bosDetected = lastCandle.close > highestHigh || lastCandle.close < lowestLow;
+  if (bosDetected) criteriaPassed.break_of_structure = true;
+  else criteriaFailed.break_of_structure = true;
+
   const passedCount = Object.keys(criteriaPassed).length;
   const totalCriteria = passedCount + Object.keys(criteriaFailed).length;
 
@@ -88,48 +87,20 @@ export function analyzeSMCStrategy(candles: Candle[]): StrategyResult {
       confidence: (passedCount / totalCriteria) * 100,
       criteriaPassed,
       criteriaFailed,
-      explanation: 'The market structure is developing but lacks sufficient institutional confirmation. Waiting for clearer smart money footprints.',
-      details: {
-        liquiditySweep: liquiditySweep.strength,
-        breakOfStructure: breakOfStructure.strength,
-        passedCount,
-        totalCriteria
-      }
+      explanation: `SMC analysis incomplete: only ${passedCount}/4 criteria met. Waiting for ${Object.keys(criteriaFailed).join(', ')}.`,
+      details: { swingPoints: swings.length, passedCount, totalCriteria }
     };
   }
 
-  let signal: 'BUY' | 'SELL' = 'HOLD';
-  if (breakOfStructure.detected && breakOfStructure.type && breakOfStructure.strength >= 60) {
-    signal = breakOfStructure.type === 'bullish' ? 'BUY' : 'SELL';
-  } else {
-    signal = lastCandle.close > candles[candles.length - 2].close ? 'BUY' : 'SELL';
-  }
-
-  let confidence = 50 + (passedCount / totalCriteria) * 30;
-
-  if (liquiditySweep.detected && liquiditySweep.strength >= 50) {
-    confidence += (liquiditySweep.strength / 100) * 15;
-  }
-  if (breakOfStructure.detected && breakOfStructure.strength >= 60) {
-    confidence += (breakOfStructure.strength / 100) * 15;
-  }
-
-  confidence = Math.min(95, confidence);
+  const signal: 'BUY' | 'SELL' = lastCandle.close > candles[candles.length - 2].close ? 'BUY' : 'SELL';
+  const confidence = Math.min(95, 50 + (passedCount / totalCriteria) * 50);
 
   return {
     signal,
     confidence,
     criteriaPassed,
     criteriaFailed,
-    explanation: `Institutional ${signal.toLowerCase()} setup detected. ${
-      liquiditySweep.detected ? liquiditySweep.description + '. ' : ''
-    }${
-      breakOfStructure.detected ? breakOfStructure.description + '. ' : ''
-    }Smart money positioning confirmée avec analyse avancée SMC.`,
-    details: {
-      direction: signal,
-      liquiditySweep: liquiditySweep,
-      breakOfStructure: breakOfStructure
-    }
+    explanation: `SMC ${signal}: ${Object.keys(criteriaPassed).join(', ')} detected. ${passedCount}/${totalCriteria} criteria met.`,
+    details: { swingPoints: swings.length, direction: signal }
   };
 }

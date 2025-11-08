@@ -116,7 +116,7 @@ export function analyzeEMAStrategy(candles: Candle[]): StrategyResult {
       confidence: (passedCount / totalCriteria) * 100,
       criteriaPassed,
       criteriaFailed,
-      explanation: 'The momentum is stirring beneath the surface, but I need to see the trend declare itself more clearly. The setup is developing - let\'s wait for the market to show us its true intention.',
+      explanation: `EMA Momentum insufficient: ${passedCount}/${totalCriteria} criteria. Missing: ${Object.keys(criteriaFailed).join(', ')}.`,
       details: { rsi, atr, ema50: current50, ema100: current100, ema200: current200 }
     };
   }
@@ -134,7 +134,7 @@ export function analyzeEMAStrategy(candles: Candle[]): StrategyResult {
       confidence: (passedCount / totalCriteria) * 100,
       criteriaPassed,
       criteriaFailed,
-      explanation: 'Momentum criteria met but trend direction remains unclear',
+      explanation: 'EMA criteria met but no clear directional bias',
       details: { rsi, atr }
     };
   }
@@ -146,7 +146,7 @@ export function analyzeEMAStrategy(candles: Candle[]): StrategyResult {
     confidence,
     criteriaPassed,
     criteriaFailed,
-    explanation: `Beautiful trend alignment here. The momentum is crystal clear and the RSI is perfectly positioned at ${rsi.toFixed(1)}. This is the kind of ${signal.toLowerCase()} setup that pays the bills.`,
+    explanation: `EMA Momentum ${signal}: ${Object.keys(criteriaPassed).join(', ')}. RSI: ${rsi.toFixed(1)}.`,
     details: { rsi, atr, direction: signal, ema50: current50, ema100: current100 }
   };
 }
